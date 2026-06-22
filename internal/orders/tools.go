@@ -56,13 +56,11 @@ func findOrder(s *Store, query string) (string, error) {
 	if o, ok := s.Get(q); ok {
 		return getOrderStatus(s, o.ID)
 	}
-	// fall back to item substring match across all customers
+	// fall back to item substring match across all orders
 	var hits []Order
-	for _, c := range []string{"alice", "bob"} {
-		for _, o := range s.ByCustomer(c) {
-			if strings.Contains(strings.ToLower(o.Item), strings.ToLower(query)) {
-				hits = append(hits, o)
-			}
+	for _, o := range s.AllOrders() {
+		if strings.Contains(strings.ToLower(o.Item), strings.ToLower(query)) {
+			hits = append(hits, o)
 		}
 	}
 	if len(hits) == 0 {

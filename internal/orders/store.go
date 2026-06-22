@@ -90,6 +90,16 @@ func (s *Store) Stats(period string) (SalesStat, bool) {
 	return st, ok
 }
 
+func (s *Store) AllOrders() []Order {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []Order
+	for _, o := range s.orders {
+		out = append(out, o)
+	}
+	return out
+}
+
 func (s *Store) Refund(id string) (Order, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
