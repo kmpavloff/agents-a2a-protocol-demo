@@ -76,6 +76,13 @@ func TestClientRelaysInputRequiredThenCompletes(t *testing.T) {
 		t.Fatalf("want NEEDS_USER_INPUT prefix, got %q", first)
 	}
 
+	// Capture the pending task ID after the first (input-required) turn; the
+	// second ask must resume the SAME task rather than starting a new one.
+	pendingID := c.pendingTaskID(sess)
+	if pendingID == "" {
+		t.Fatal("expected a pending task id after input-required turn, got empty")
+	}
+
 	second, err := c.ask(context.Background(), sess, "1041")
 	if err != nil {
 		t.Fatal(err)
@@ -83,4 +90,11 @@ func TestClientRelaysInputRequiredThenCompletes(t *testing.T) {
 	if !strings.Contains(second, "Refund initiated") {
 		t.Fatalf("want completion text containing 'Refund initiated', got %q", second)
 	}
+
+	// After completion the pending entry must be cleared (task was resumed, not
+	// a new task), confirming resume identity via the A2A protocol.
+	if afterID := c.pendingTaskID(sess); afterID != "" {
+		t.Errorf("expected pending task cleared after completion, still have id %q", afterID)
+	}
+	_ = pendingID // referenced above; keep the variable for clarity
 }

@@ -99,6 +99,14 @@ func (c *OrdersClient) clearPending(sessionID string) {
 	c.mu.Unlock()
 }
 
+// pendingTaskID returns the A2A task id that is pending for the given session,
+// or the zero value if there is none. Intended for tests.
+func (c *OrdersClient) pendingTaskID(sessionID string) a2a.TaskID {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.pending[sessionID].taskID
+}
+
 // askArgs is the input schema for the ask_orders_agent adk function tool.
 type askArgs struct {
 	Message string `json:"message" description:"What to ask or tell the orders agent"`
@@ -133,17 +141,23 @@ func statusMessageText(t *a2a.Task) string {
 
 // taskResultText returns the last artifact text of a completed task, falling
 // back to the last history message text, then "Done." if neither is present.
+// Empty-text parts are skipped so that a blank artifact falls through to the
+// "Done." fallback rather than returning an empty string.
 func taskResultText(t *a2a.Task) string {
 	if len(t.Artifacts) > 0 {
 		last := t.Artifacts[len(t.Artifacts)-1]
-		if len(last.Parts) > 0 {
-			return last.Parts[0].Text()
+		for _, p := range last.Parts {
+			if txt := p.Text(); txt != "" {
+				return txt
+			}
 		}
 	}
 	if len(t.History) > 0 {
 		last := t.History[len(t.History)-1]
-		if len(last.Parts) > 0 {
-			return last.Parts[0].Text()
+		for _, p := range last.Parts {
+			if txt := p.Text(); txt != "" {
+				return txt
+			}
 		}
 	}
 	return "Done."

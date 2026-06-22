@@ -72,7 +72,12 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 		}
 
 		// 5. Emit artifact + completed.
-		if !yield(a2a.NewArtifactEvent(ec, a2a.NewTextPart(finalText)), nil) {
+		// Guard against an empty finalText so we never emit a blank artifact.
+		artifactText := trimmed
+		if artifactText == "" {
+			artifactText = "Done."
+		}
+		if !yield(a2a.NewArtifactEvent(ec, a2a.NewTextPart(artifactText)), nil) {
 			return
 		}
 		yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateCompleted, nil), nil)
