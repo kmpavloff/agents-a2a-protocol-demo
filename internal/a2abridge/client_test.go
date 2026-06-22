@@ -96,5 +96,4 @@ func TestClientRelaysInputRequiredThenCompletes(t *testing.T) {
 	if afterID := c.pendingTaskID(sess); afterID != "" {
 		t.Errorf("expected pending task cleared after completion, still have id %q", afterID)
 	}
-	_ = pendingID // referenced above; keep the variable for clarity
 }

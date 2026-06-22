@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"iter"
+	"strings"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -113,6 +114,7 @@ func toOpenAIMessages(req *adkmodel.LLMRequest) []openai.ChatCompletionMessagePa
 			b, _ := json.Marshal(fr.Response)
 			// Use FunctionResponse.ID as the tool_call_id; fall back to
 			// "call_"+name to match the id synthesised in the assistant message.
+			// Note: two un-ID'd calls to the same tool name would collide on "call_"+name; real responses carry tc.ID.
 			toolCallID := fr.ID
 			if toolCallID == "" {
 				toolCallID = "call_" + fr.Name
@@ -195,6 +197,9 @@ func toOpenAITools(req *adkmodel.LLMRequest) []openai.ChatCompletionToolParam {
 				b, err := json.Marshal(fd.Parameters)
 				if err == nil {
 					_ = json.Unmarshal(b, &params)
+					// shared.FunctionParameters is a named type; convert to map[string]any
+					// so lowercaseSchemaTypes's type switch matches.
+					lowercaseSchemaTypes(map[string]any(params))
 				}
 			}
 			fnDef := shared.FunctionDefinitionParam{
@@ -208,6 +213,26 @@ func toOpenAITools(req *adkmodel.LLMRequest) []openai.ChatCompletionToolParam {
 		}
 	}
 	return tools
+}
+
+// lowercaseSchemaTypes walks a JSON-Schema map (as produced by marshalling a
+// genai.Schema) and lowercases every "type" value at any nesting depth.
+// genai serialises the Type enum as UPPERCASE (e.g. "OBJECT", "STRING"),
+// but JSON-Schema and strict OpenAI-compatible servers require lowercase.
+func lowercaseSchemaTypes(v any) {
+	switch t := v.(type) {
+	case map[string]any:
+		if s, ok := t["type"].(string); ok {
+			t["type"] = strings.ToLower(s)
+		}
+		for _, child := range t {
+			lowercaseSchemaTypes(child)
+		}
+	case []any:
+		for _, child := range t {
+			lowercaseSchemaTypes(child)
+		}
+	}
 }
 
 // parseJSONObject parses a JSON object string into a map. Malformed JSON
@@ -231,17 +256,6 @@ func contentText(c *genai.Content) string {
 		s += p.Text
 	}
 	return s
-}
-
-// firstFunctionCall returns the first FunctionCall part found in a Content,
-// or nil if none exists.
-func firstFunctionCall(c *genai.Content) *genai.FunctionCall {
-	for _, p := range c.Parts {
-		if p.FunctionCall != nil {
-			return p.FunctionCall
-		}
-	}
-	return nil
 }
 
 // allFunctionCalls returns all FunctionCall parts found in a Content.

@@ -159,6 +159,30 @@ func TestToolsAreSentToEndpoint(t *testing.T) {
 	if fn["name"] != "get_order_status" {
 		t.Errorf("expected function name 'get_order_status', got %v", fn["name"])
 	}
+
+	// Verify that the parameters object has lowercase JSON-Schema types.
+	paramsRaw, ok := fn["parameters"]
+	if !ok {
+		t.Fatal("expected 'parameters' key in function object, not found")
+	}
+	params, ok := paramsRaw.(map[string]any)
+	if !ok {
+		t.Fatalf("expected parameters to be a JSON object, got %T", paramsRaw)
+	}
+	if params["type"] != "object" {
+		t.Errorf("expected top-level parameters type to be \"object\" (lowercase), got %v", params["type"])
+	}
+	props, ok := params["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("expected 'properties' in parameters")
+	}
+	orderIDProp, ok := props["order_id"].(map[string]any)
+	if !ok {
+		t.Fatal("expected 'order_id' property in parameters")
+	}
+	if orderIDProp["type"] != "string" {
+		t.Errorf("expected order_id type to be \"string\" (lowercase), got %v", orderIDProp["type"])
+	}
 }
 
 // TestToolCallHistoryTranslatesToAssistantThenTool verifies that a Contents
