@@ -1,0 +1,33 @@
+services:
+  worker:
+    build:
+      context: .
+      args:
+        TARGET: worker
+    environment:
+      WORKER_LISTEN_ADDR: ":8081"
+      # Must match the hostname reachable inside the compose network so the
+      # orchestrator can resolve the AgentCard endpoint advertised by the worker.
+      WORKER_PUBLIC_URL: "http://worker:8081"
+      LLM_BASE_URL: "http://host.docker.internal:1234/v1"
+    # Allow containers to reach LM Studio running on the host (Linux).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8081:8081"
+
+  orchestrator:
+    build:
+      context: .
+      args:
+        TARGET: orchestrator
+    depends_on:
+      - worker
+    environment:
+      WORKER_URL: "http://worker:8081"
+      LLM_BASE_URL: "http://host.docker.internal:1234/v1"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Interactive TUI requires an attached terminal.
+    stdin_open: true
+    tty: true
