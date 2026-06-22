@@ -51,6 +51,9 @@ func LoadWorker(path string) (WorkerConfig, error) {
 	if c.ListenAddr == "" {
 		return c, fmt.Errorf("worker config: listen_addr is required")
 	}
+	if c.PublicURL == "" {
+		return c, fmt.Errorf("worker config: public_url is required")
+	}
 	if c.DataPath == "" {
 		return c, fmt.Errorf("worker config: data_path is required")
 	}

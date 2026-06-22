@@ -36,3 +36,25 @@ func TestLoadWorkerValidatesRequired(t *testing.T) {
 		t.Fatal("expected validation error for empty listen_addr")
 	}
 }
+
+func TestLoadOrchestratorAppliesEnvOverride(t *testing.T) {
+	p := writeTemp(t, "worker_url: \"http://localhost:8081\"\nllm:\n  base_url: \"http://localhost:1234/v1\"\n  model: \"local-model\"\n  api_key: \"lm-studio\"\n")
+	t.Setenv("WORKER_URL", "http://host.docker.internal:8081")
+	cfg, err := LoadOrchestrator(p)
+	if err != nil {
+		t.Fatalf("LoadOrchestrator: %v", err)
+	}
+	if cfg.WorkerURL != "http://host.docker.internal:8081" {
+		t.Errorf("env override not applied: got %q", cfg.WorkerURL)
+	}
+	if cfg.LLM.BaseURL != "http://localhost:1234/v1" {
+		t.Errorf("llm.base_url from YAML not preserved: got %q", cfg.LLM.BaseURL)
+	}
+}
+
+func TestLoadOrchestratorValidatesRequired(t *testing.T) {
+	p := writeTemp(t, "worker_url: \"\"\n")
+	if _, err := LoadOrchestrator(p); err == nil {
+		t.Fatal("expected validation error for empty worker_url")
+	}
+}
