@@ -1,0 +1,12 @@
+{
+  "orders": [
+    { "id": "1023", "customer": "alice", "item": "Mechanical keyboard", "amount": 89.90, "currency": "EUR", "status": "delivered", "created": "2026-06-01", "refundable": true },
+    { "id": "1041", "customer": "alice", "item": "USB-C hub", "amount": 34.50, "currency": "EUR", "status": "delivered", "created": "2026-06-10", "refundable": true },
+    { "id": "1055", "customer": "alice", "item": "Laptop stand", "amount": 45.00, "currency": "EUR", "status": "shipped", "created": "2026-06-18", "refundable": false },
+    { "id": "2007", "customer": "bob", "item": "Wireless mouse", "amount": 25.00, "currency": "EUR", "status": "processing", "created": "2026-06-20", "refundable": false }
+  ],
+  "sales_stats": [
+    { "period": "2026-05", "orders": 320, "revenue": 14250.40, "currency": "EUR" },
+    { "period": "2026-06", "orders": 198, "revenue": 9120.10, "currency": "EUR" }
+  ]
+}

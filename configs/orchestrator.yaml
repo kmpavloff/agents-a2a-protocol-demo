@@ -1,0 +1,6 @@
+# Orchestrator configuration. Env vars override these (see internal/config).
+worker_url: "http://localhost:8081"
+llm:
+  base_url: "http://localhost:1234/v1"
+  model: "local-model"
+  api_key: "lm-studio"
