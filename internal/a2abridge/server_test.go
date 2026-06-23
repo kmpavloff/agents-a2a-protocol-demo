@@ -32,10 +32,10 @@ func newTestRunner(t *testing.T, model *llm.Stub, store *orders.Store) *runner.R
 
 func TestExecutorEmitsInputRequired(t *testing.T) {
 	store := seedStore(t)
-	model := llm.NewStub(llm.StubTurn{Text: "NEED_INPUT: Which order id should I refund?"})
+	model := llm.NewStub(llm.StubTurn{Text: "NEED_INPUT: Какой заказ вернуть?"})
 	exec := NewExecutor(newTestRunner(t, model, store))
 
-	states := runExecutor(t, exec, "refund my order")
+	states := runExecutor(t, exec, "оформить возврат")
 	if len(states) == 0 {
 		t.Fatal("no states emitted")
 	}
@@ -48,11 +48,11 @@ func TestExecutorCompletesWithAnswer(t *testing.T) {
 	store := seedStore(t)
 	model := llm.NewStub(
 		llm.StubTurn{Call: &genai.FunctionCall{Name: "get_order_status", Args: map[string]any{"order_id": "1041"}}},
-		llm.StubTurn{Text: "Order 1041 is delivered."},
+		llm.StubTurn{Text: "Заказ 1041 доставлен."},
 	)
 	exec := NewExecutor(newTestRunner(t, model, store))
 
-	states, text := runExecutorCollect(t, exec, "status of 1041")
+	states, text := runExecutorCollect(t, exec, "статус 1041")
 	if len(states) == 0 {
 		t.Fatal("no states emitted")
 	}
@@ -68,7 +68,7 @@ func TestExecutorCompletesWithAnswer(t *testing.T) {
 func seedStore(t *testing.T) *orders.Store {
 	t.Helper()
 	p := t.TempDir() + "/o.json"
-	body := `{"orders":[{"id":"1041","customer":"alice","item":"Hub","amount":34.5,"currency":"EUR","status":"delivered","created":"2026-06-10","refundable":true}],"sales_stats":[]}`
+	body := `{"orders":[{"id":"1041","customer":"alice","item":"Хаб","amount":34.5,"currency":"EUR","status":"delivered","created":"2026-06-10","refundable":true}],"sales_stats":[]}`
 	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

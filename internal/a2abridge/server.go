@@ -75,7 +75,7 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 		// Guard against an empty finalText so we never emit a blank artifact.
 		artifactText := trimmed
 		if artifactText == "" {
-			artifactText = "Done."
+			artifactText = "Готово."
 		}
 		if !yield(a2a.NewArtifactEvent(ec, a2a.NewTextPart(artifactText)), nil) {
 			return
@@ -98,7 +98,7 @@ func (e *executor) Cancel(_ context.Context, ec *a2asrv.ExecutorContext) iter.Se
 func AgentCard(publicURL string) *a2a.AgentCard {
 	return &a2a.AgentCard{
 		Name:               "orders-agent",
-		Description:        "Manages orders, statuses, statistics and refunds.",
+		Description:        "Управляет заказами, статусами, статистикой и возвратами.",
 		Version:            "0.1.0",
 		DefaultInputModes:  []string{"text/plain"},
 		DefaultOutputModes: []string{"text/plain"},
@@ -107,8 +107,8 @@ func AgentCard(publicURL string) *a2a.AgentCard {
 		},
 		Skills: []a2a.AgentSkill{{
 			ID:          "manage_orders",
-			Name:        "Manage orders",
-			Description: "Look up orders, statuses, sales statistics, and initiate refunds.",
+			Name:        "Управление заказами",
+			Description: "Поиск заказов, статусы, статистика продаж и оформление возвратов.",
 		}},
 	}
 }

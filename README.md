@@ -92,6 +92,18 @@ Override any value with environment variables:
 | `LLM_API_KEY` | `lm-studio` | API key (any non-empty string works) |
 | `WORKER_DATA_PATH` | `data/orders.json` | Path to the seed orders file |
 
+> **WSL2 + LM Studio on Windows.** If you run the agents inside WSL2 while LM Studio
+> runs on the Windows host, `http://localhost:1234` usually does **not** reach it
+> (NAT networking, and the Hyper-V firewall blocks WSL→Windows loopback). Fix:
+> 1. In LM Studio enable **"Serve on Local Network"** so it binds `0.0.0.0:1234`.
+> 2. Point the agents at the Windows host's LAN IP, e.g.:
+>    ```bash
+>    export LLM_BASE_URL=http://192.168.1.53:1234/v1   # your Windows host IP
+>    export LLM_MODEL=openai/gpt-oss-20b               # a tool-capable model
+>    ```
+>    Find the address LM Studio reports in its Developer / Local Server tab. Verify
+>    from WSL2 with `curl $LLM_BASE_URL/models` before starting the agents.
+
 ---
 
 ## Running via Docker Compose

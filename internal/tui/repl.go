@@ -21,17 +21,17 @@ const (
 // Run starts a REPL that reads user input, runs it through the orchestrator
 // runner, and prints assistant responses. Returns nil on "exit"/"quit" or EOF.
 func Run(ctx context.Context, r *runner.Runner) error {
-	fmt.Printf("%sOrders Assistant.%s Type your request, or 'exit' to quit.\n", cyan, reset)
+	fmt.Printf("%sАссистент службы заказов.%s Введите запрос или 'exit' для выхода.\n", cyan, reset)
 	in := bufio.NewScanner(os.Stdin)
 	in.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	const userID, sessID = "tui-user", "tui-session"
 	for {
-		fmt.Printf("%syou>%s ", cyan, reset)
+		fmt.Printf("%sвы>%s ", cyan, reset)
 		if !in.Scan() {
 			return in.Err()
 		}
 		line := in.Text()
-		if line == "exit" || line == "quit" {
+		if line == "exit" || line == "quit" || line == "выход" {
 			return nil
 		}
 		if line == "" {
@@ -40,7 +40,7 @@ func Run(ctx context.Context, r *runner.Runner) error {
 		msg := genai.NewContentFromText(line, genai.RoleUser)
 		for event, err := range r.Run(ctx, userID, sessID, msg, agent.RunConfig{}) {
 			if err != nil {
-				fmt.Printf("%s[error] %v%s\n", gray, err, reset)
+				fmt.Printf("%s[ошибка] %v%s\n", gray, err, reset)
 				break
 			}
 			if event != nil && event.Content != nil {
@@ -51,7 +51,7 @@ func Run(ctx context.Context, r *runner.Runner) error {
 					}
 				}
 				if combined != "" {
-					fmt.Printf("%sassistant>%s %s\n", cyan, reset, combined)
+					fmt.Printf("%sассистент>%s %s\n", cyan, reset, combined)
 				}
 			}
 		}

@@ -73,7 +73,7 @@ func (c *OrdersClient) ask(ctx context.Context, sessionID, text string) (string,
 		if len(r.Parts) > 0 {
 			return r.Parts[0].Text(), nil
 		}
-		return "Done.", nil
+		return "Готово.", nil
 
 	case *a2a.Task:
 		if r.Status.State == a2a.TaskStateInputRequired {
@@ -109,7 +109,7 @@ func (c *OrdersClient) pendingTaskID(sessionID string) a2a.TaskID {
 
 // askArgs is the input schema for the ask_orders_agent adk function tool.
 type askArgs struct {
-	Message string `json:"message" description:"What to ask or tell the orders agent"`
+	Message string `json:"message" description:"Что спросить или сообщить агенту по заказам"`
 }
 
 // Tool returns an adk function tool named ask_orders_agent that delegates to
@@ -118,7 +118,7 @@ type askArgs struct {
 func (c *OrdersClient) Tool() tool.Tool {
 	t, err := functiontool.New(functiontool.Config{
 		Name:        "ask_orders_agent",
-		Description: "Delegate an order-related request to the orders agent. If it returns NEEDS_USER_INPUT, ask the user that question, then call this tool again with their answer.",
+		Description: "Делегировать запрос про заказы агенту по заказам. Если он вернёт NEEDS_USER_INPUT, задайте пользователю этот вопрос, затем снова вызовите инструмент с его ответом.",
 	}, func(tc tool.Context, a askArgs) (string, error) {
 		// tool.Context embeds context.Context via agent.ReadonlyContext, so tc
 		// itself satisfies context.Context. SessionID() is also on ReadonlyContext.
@@ -136,7 +136,7 @@ func statusMessageText(t *a2a.Task) string {
 	if t.Status.Message != nil && len(t.Status.Message.Parts) > 0 {
 		return t.Status.Message.Parts[0].Text()
 	}
-	return "The orders agent needs more information."
+	return "Агенту по заказам нужны дополнительные данные."
 }
 
 // taskResultText returns the last artifact text of a completed task, falling
@@ -160,5 +160,5 @@ func taskResultText(t *a2a.Task) string {
 			}
 		}
 	}
-	return "Done."
+	return "Готово."
 }

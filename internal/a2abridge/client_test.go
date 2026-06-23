@@ -57,8 +57,8 @@ func startWorker(t *testing.T, model *llm.Stub) string {
 func TestClientRelaysInputRequiredThenCompletes(t *testing.T) {
 	// First worker invocation asks for an order id; second resumes the same task.
 	model := llm.NewStub(
-		llm.StubTurn{Text: "NEED_INPUT: Which order id?"},
-		llm.StubTurn{Text: "Refund initiated for 1041."},
+		llm.StubTurn{Text: "NEED_INPUT: Какой номер заказа?"},
+		llm.StubTurn{Text: "Возврат по заказу 1041 оформлен."},
 	)
 	url := startWorker(t, model)
 
@@ -68,7 +68,7 @@ func TestClientRelaysInputRequiredThenCompletes(t *testing.T) {
 	}
 	sess := "orch-session-1"
 
-	first, err := c.ask(context.Background(), sess, "refund my order")
+	first, err := c.ask(context.Background(), sess, "оформить возврат")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,8 +87,8 @@ func TestClientRelaysInputRequiredThenCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(second, "Refund initiated") {
-		t.Fatalf("want completion text containing 'Refund initiated', got %q", second)
+	if !strings.Contains(second, "оформлен") {
+		t.Fatalf("want completion text containing 'оформлен', got %q", second)
 	}
 
 	// After completion the pending entry must be cleared (task was resumed, not

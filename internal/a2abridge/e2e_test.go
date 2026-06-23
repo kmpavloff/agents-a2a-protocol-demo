@@ -14,8 +14,8 @@ import (
 func TestEndToEndRefundWithClarification(t *testing.T) {
 	// Worker stub: turn 1 asks for clarification, turn 2 completes the refund.
 	workerModel := llm.NewStub(
-		llm.StubTurn{Text: "NEED_INPUT: Which order id should I refund?"},
-		llm.StubTurn{Text: "Refund initiated for order 1041."},
+		llm.StubTurn{Text: "NEED_INPUT: Какой заказ вернуть?"},
+		llm.StubTurn{Text: "Возврат по заказу 1041 оформлен."},
 	)
 
 	// Reuse the existing in-process worker helper from client_test.go.
@@ -29,7 +29,7 @@ func TestEndToEndRefundWithClarification(t *testing.T) {
 	sess := "e2e"
 
 	// Turn 1: worker needs clarification.
-	r1, err := oc.ask(context.Background(), sess, "I want a refund for my last order")
+	r1, err := oc.ask(context.Background(), sess, "хочу вернуть деньги за последний заказ")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,11 +38,11 @@ func TestEndToEndRefundWithClarification(t *testing.T) {
 	}
 
 	// Turn 2: provide order id; same worker task is resumed and completes.
-	r2, err := oc.ask(context.Background(), sess, "order 1041")
+	r2, err := oc.ask(context.Background(), sess, "заказ 1041")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(r2, "Refund initiated") {
+	if !strings.Contains(r2, "оформлен") {
 		t.Fatalf("turn 2 should complete refund, got %q", r2)
 	}
 }

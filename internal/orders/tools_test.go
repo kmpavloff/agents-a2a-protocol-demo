@@ -11,7 +11,7 @@ func TestGetOrderStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "delivered") {
+	if !strings.Contains(out, "доставлен") {
 		t.Errorf("want status in output, got %q", out)
 	}
 }
@@ -22,7 +22,7 @@ func TestGetOrderStatusNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("domain miss must not be a Go error, got %v", err)
 	}
-	if !strings.Contains(strings.ToLower(out), "not found") {
+	if !strings.Contains(strings.ToLower(out), "не найден") {
 		t.Errorf("want 'not found' message, got %q", out)
 	}
 }
@@ -44,7 +44,7 @@ func TestInitiateRefundNotRefundable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("must not be a Go error, got %v", err)
 	}
-	if !strings.Contains(strings.ToLower(out), "not refundable") {
+	if !strings.Contains(strings.ToLower(out), "не подлежит возврату") {
 		t.Errorf("want not-refundable message, got %q", out)
 	}
 }
@@ -55,8 +55,8 @@ func TestFindOrderByID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "1041") || !strings.Contains(out, "Hub") {
-		t.Errorf("want order 1041 with item Hub, got %q", out)
+	if !strings.Contains(out, "1041") || !strings.Contains(out, "Хаб") {
+		t.Errorf("want order 1041 with item Хаб, got %q", out)
 	}
 }
 
@@ -66,19 +66,19 @@ func TestFindOrderByIDWithHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "1041") || !strings.Contains(out, "Hub") {
-		t.Errorf("want order 1041 with item Hub, got %q", out)
+	if !strings.Contains(out, "1041") || !strings.Contains(out, "Хаб") {
+		t.Errorf("want order 1041 with item Хаб, got %q", out)
 	}
 }
 
 func TestFindOrderBySubstring(t *testing.T) {
 	s := seed(t)
-	out, err := findOrder(s, "Hub")
+	out, err := findOrder(s, "Хаб")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out, "1041") {
-		t.Errorf("want Hub order in matches, got %q", out)
+		t.Errorf("want Хаб order in matches, got %q", out)
 	}
 }
 
@@ -88,7 +88,7 @@ func TestFindOrderNoMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("domain miss must not be a Go error, got %v", err)
 	}
-	if !strings.Contains(strings.ToLower(out), "no order matched") {
+	if !strings.Contains(strings.ToLower(out), "ничего не найдено") {
 		t.Errorf("want 'no order matched' message, got %q", out)
 	}
 }
@@ -99,7 +99,7 @@ func TestInitiateRefundNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("domain miss must not be a Go error, got %v", err)
 	}
-	if !strings.Contains(strings.ToLower(out), "not found") {
+	if !strings.Contains(strings.ToLower(out), "не найден") {
 		t.Errorf("want 'not found' message, got %q", out)
 	}
 }
