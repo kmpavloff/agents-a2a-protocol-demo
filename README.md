@@ -20,19 +20,20 @@ API).
 
 ## Architecture
 
+```mermaid
+flowchart LR
+    user(["Пользователь"]) -->|"TUI / REPL"| orch
+    orch["orchestrator<br/>adk-go LLM + A2A client"]
+    worker["worker · orders-agent :8081<br/>adk-go LLM + A2A server"]
+    orch -->|"A2A: message/send"| worker
+    worker -->|"input-required / completed"| orch
+    worker -->|"вызовы инструментов"| tools[("mock tools<br/>data/orders.json")]
+    orch -->|"OpenAI-compat (LLM)"| lms["LM Studio"]
+    worker -->|"OpenAI-compat (LLM)"| lms
 ```
-┌─────────────────────────┐   A2A (JSON-RPC + SSE)   ┌──────────────────────┐
-│      orchestrator        │ ───────────────────────► │       worker         │
-│  TUI (REPL) + adk-go LLM │ ◄─────────────────────── │   orders-agent       │
-│      A2A client          │   input-required / done  │   adk-go LLM         │
-└────────────┬─────────────┘                          │   A2A server (:8081) │
-             │                                         └──────────┬───────────┘
-             └──────────► LM Studio (OpenAI-compat) ◄─────────────┘
-                          http://localhost:1234/v1  (local)
-                          http://host.docker.internal:1234/v1  (Docker)
 
-                          mock tools ↑ (data/orders.json)
-```
+> LM Studio endpoint: `http://localhost:1234/v1` locally, or
+> `http://host.docker.internal:1234/v1` from Docker (see the WSL2 note below).
 
 The orchestrator is an `adk-go` `LlmAgent` with one custom tool `ask_orders_agent`.
 That tool holds an `a2aclient.Client` pointing at the worker and stores any pending
