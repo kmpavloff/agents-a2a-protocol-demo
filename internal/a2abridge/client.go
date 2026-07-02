@@ -3,6 +3,7 @@ package a2abridge
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -23,23 +24,26 @@ type pending struct {
 // a follow-up user message resumes the exact same worker task.
 type OrdersClient struct {
 	client  *a2aclient.Client
+	trace   *Tracer
 	mu      sync.Mutex
 	pending map[string]pending // keyed by orchestrator session id
 }
 
 // NewOrdersClient resolves the worker AgentCard at workerURL and creates an
-// A2A client from it.
-func NewOrdersClient(ctx context.Context, workerURL string) (*OrdersClient, error) {
+// A2A client from it. trace may be nil to disable protocol tracing.
+func NewOrdersClient(ctx context.Context, workerURL string, trace *Tracer) (*OrdersClient, error) {
 	card, err := agentcard.DefaultResolver.Resolve(ctx, workerURL)
 	if err != nil {
 		return nil, fmt.Errorf("resolve worker card: %w", err)
 	}
+	trace.Logf("resolved worker AgentCard %q at %s", card.Name, workerURL)
 	cl, err := a2aclient.NewFromCard(ctx, card)
 	if err != nil {
 		return nil, fmt.Errorf("a2a client: %w", err)
 	}
 	return &OrdersClient{
 		client:  cl,
+		trace:   trace,
 		pending: make(map[string]pending),
 	}, nil
 }
@@ -48,46 +52,71 @@ func NewOrdersClient(ctx context.Context, workerURL string) (*OrdersClient, erro
 // orders worker agent, resuming a pending input-required task when one exists
 // for the given sessionID, and returns the agent's response text.
 func (c *OrdersClient) ask(ctx context.Context, sessionID, text string) (string, error) {
+	// Guard against empty/whitespace messages: some models emit a probing tool
+	// call with no message. Instead of wasting an A2A round-trip, tell the model
+	// to supply a concrete request. Returned as a normal tool result (not an
+	// error) so the model reads it and retries with real content.
+	if strings.TrimSpace(text) == "" {
+		c.trace.Logf("✖ empty message — skipping A2A call, asking model to provide a concrete request | session=%s", sessionID)
+		return "Пустой запрос: сформулируйте конкретный вопрос или действие по заказам в поле message и вызовите инструмент снова.", nil
+	}
+
 	c.mu.Lock()
 	p, hasPending := c.pending[sessionID]
 	c.mu.Unlock()
 
+	c.trace.Logf("──▶ orchestrator delegating to orders worker | session=%s", sessionID)
+
 	var msg *a2a.Message
 	if hasPending {
 		// Resume an existing input-required task by referencing its IDs.
+		c.trace.Logf("    resuming input-required task | taskID=%s contextID=%s", p.taskID, p.contextID)
 		info := a2a.TaskInfo{TaskID: p.taskID, ContextID: p.contextID}
 		msg = a2a.NewMessageForTask(a2a.MessageRoleUser, info, a2a.NewTextPart(text))
 	} else {
+		c.trace.Logf("    starting new task (no pending task for session)")
 		msg = a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(text))
 	}
+	c.trace.Logf("    SendMessage role=user text=%q", text)
 
 	res, err := c.client.SendMessage(ctx, &a2a.SendMessageRequest{Message: msg})
 	if err != nil {
+		c.trace.Logf("    ✖ SendMessage failed: %v", err)
 		return "", fmt.Errorf("orders agent unreachable: %w", err)
 	}
 
 	switch r := res.(type) {
 	case *a2a.Message:
 		// Synchronous response — no task created.
+		c.trace.Logf("◀── response: Message (synchronous, no task) | parts=%d", len(r.Parts))
 		c.clearPending(sessionID)
 		if len(r.Parts) > 0 {
-			return r.Parts[0].Text(), nil
+			result := r.Parts[0].Text()
+			c.trace.Logf("    ✔ result=%q", result)
+			return result, nil
 		}
+		c.trace.Logf("    ✔ empty message, returning fallback")
 		return "Готово.", nil
 
 	case *a2a.Task:
+		c.trace.Logf("◀── response: Task | id=%s contextID=%s state=%s", r.ID, r.ContextID, r.Status.State)
 		if r.Status.State == a2a.TaskStateInputRequired {
 			// Store the task so the next call resumes it.
 			c.mu.Lock()
 			c.pending[sessionID] = pending{taskID: r.ID, contextID: r.ContextID}
 			c.mu.Unlock()
-			return "NEEDS_USER_INPUT: " + statusMessageText(r), nil
+			question := statusMessageText(r)
+			c.trace.Logf("    ⏸ input-required — stored pending task, asking user: %q", question)
+			return "NEEDS_USER_INPUT: " + question, nil
 		}
 		// Completed (or failed/canceled) — clear any pending state.
 		c.clearPending(sessionID)
-		return taskResultText(r), nil
+		result := taskResultText(r)
+		c.trace.Logf("    ✔ terminal state, cleared pending | result=%q", result)
+		return result, nil
 
 	default:
+		c.trace.Logf("    ✖ unexpected A2A result type %T", res)
 		return "", fmt.Errorf("unexpected A2A result type %T", res)
 	}
 }

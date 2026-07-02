@@ -33,7 +33,7 @@ func newTestRunner(t *testing.T, model *llm.Stub, store *orders.Store) *runner.R
 func TestExecutorEmitsInputRequired(t *testing.T) {
 	store := seedStore(t)
 	model := llm.NewStub(llm.StubTurn{Text: "NEED_INPUT: Какой заказ вернуть?"})
-	exec := NewExecutor(newTestRunner(t, model, store))
+	exec := NewExecutor(newTestRunner(t, model, store), nil)
 
 	states := runExecutor(t, exec, "оформить возврат")
 	if len(states) == 0 {
@@ -50,7 +50,7 @@ func TestExecutorCompletesWithAnswer(t *testing.T) {
 		llm.StubTurn{Call: &genai.FunctionCall{Name: "get_order_status", Args: map[string]any{"order_id": "1041"}}},
 		llm.StubTurn{Text: "Заказ 1041 доставлен."},
 	)
-	exec := NewExecutor(newTestRunner(t, model, store))
+	exec := NewExecutor(newTestRunner(t, model, store), nil)
 
 	states, text := runExecutorCollect(t, exec, "статус 1041")
 	if len(states) == 0 {

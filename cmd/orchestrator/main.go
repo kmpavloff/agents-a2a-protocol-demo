@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"os"
 
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
@@ -20,12 +21,25 @@ func main() {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
-	oc, err := a2abridge.NewOrdersClient(ctx, cfg.WorkerURL)
+
+	// A2A protocol trace goes to a file so it does not clutter the REPL on stdout.
+	logFile, err := os.OpenFile(cfg.A2ALogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		log.Fatalf("open a2a log %s: %v", cfg.A2ALogPath, err)
+	}
+	defer logFile.Close()
+	trace := a2abridge.NewTracer(logFile, "[A2A client] ")
+	log.Printf("A2A protocol trace → %s", cfg.A2ALogPath)
+
+	oc, err := a2abridge.NewOrdersClient(ctx, cfg.WorkerURL, trace)
 	if err != nil {
 		log.Fatalf("orders client (is the worker running at %s?): %v", cfg.WorkerURL, err)
 	}
 	model := llm.New(cfg.LLM)
-	ag, err := agent.NewOrchestrator(model, oc.Tool())
+	ordersTool := oc.Tool()
+	log.Printf("orchestrator tools (1):")
+	log.Printf("  - %s: %s", ordersTool.Name(), ordersTool.Description())
+	ag, err := agent.NewOrchestrator(model, ordersTool)
 	if err != nil {
 		log.Fatalf("agent: %v", err)
 	}

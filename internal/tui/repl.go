@@ -4,6 +4,7 @@ package tui
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -17,6 +18,18 @@ const (
 	gray  = "\033[90m"
 	reset = "\033[0m"
 )
+
+// compactArgs renders function-call arguments as compact JSON for a one-line
+// trace, falling back to Go's default formatting if marshaling fails.
+func compactArgs(args map[string]any) string {
+	if len(args) == 0 {
+		return ""
+	}
+	if b, err := json.Marshal(args); err == nil {
+		return string(b)
+	}
+	return fmt.Sprintf("%v", args)
+}
 
 // Run starts a REPL that reads user input, runs it through the orchestrator
 // runner, and prints assistant responses. Returns nil on "exit"/"quit" or EOF.
@@ -38,21 +51,32 @@ func Run(ctx context.Context, r *runner.Runner) error {
 			continue
 		}
 		msg := genai.NewContentFromText(line, genai.RoleUser)
+		fmt.Printf("%s  · агент → LLM: запрос%s\n", gray, reset)
 		for event, err := range r.Run(ctx, userID, sessID, msg, agent.RunConfig{}) {
 			if err != nil {
 				fmt.Printf("%s[ошибка] %v%s\n", gray, err, reset)
 				break
 			}
-			if event != nil && event.Content != nil {
-				var combined string
-				for _, p := range event.Content.Parts {
-					if p.Text != "" {
-						combined += p.Text
-					}
+			if event == nil || event.Content == nil {
+				continue
+			}
+			var combined string
+			for _, p := range event.Content.Parts {
+				switch {
+				case p.FunctionCall != nil:
+					// LLM решило, какой инструмент вызвать.
+					fmt.Printf("%s  · LLM → агент: вызвать %s(%s)%s\n",
+						gray, p.FunctionCall.Name, compactArgs(p.FunctionCall.Args), reset)
+				case p.FunctionResponse != nil:
+					// Результат инструмента уходит обратно в LLM.
+					fmt.Printf("%s  · инструмент → LLM: результат %s, снова спрашиваю LLM%s\n",
+						gray, p.FunctionResponse.Name, reset)
+				case p.Text != "":
+					combined += p.Text
 				}
-				if combined != "" {
-					fmt.Printf("%sассистент>%s %s\n", cyan, reset, combined)
-				}
+			}
+			if combined != "" {
+				fmt.Printf("%sассистент>%s %s\n", cyan, reset, combined)
 			}
 		}
 	}

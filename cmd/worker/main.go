@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"google.golang.org/adk/runner"
@@ -25,7 +26,12 @@ func main() {
 		log.Fatalf("orders: %v", err)
 	}
 	model := llm.New(cfg.LLM)
-	ag, err := agent.NewWorker(model, orders.Tools(store))
+	tools := orders.Tools(store)
+	log.Printf("orders-agent tools (%d):", len(tools))
+	for _, t := range tools {
+		log.Printf("  - %s: %s", t.Name(), t.Description())
+	}
+	ag, err := agent.NewWorker(model, tools)
 	if err != nil {
 		log.Fatalf("agent: %v", err)
 	}
@@ -39,8 +45,12 @@ func main() {
 		log.Fatalf("runner: %v", err)
 	}
 
+	// Trace the A2A protocol exchange to stdout so the worker's activity is
+	// visible (it was previously silent between requests).
+	trace := a2abridge.NewTracer(os.Stdout, "[A2A worker] ")
+
 	card := a2abridge.AgentCard(cfg.PublicURL)
-	handler := a2asrv.NewHandler(a2abridge.NewExecutor(r))
+	handler := a2asrv.NewHandler(a2abridge.NewExecutor(r, trace))
 
 	mux := http.NewServeMux()
 	// JSON-RPC endpoint — matches the URL advertised in the agent card (publicURL/invoke).

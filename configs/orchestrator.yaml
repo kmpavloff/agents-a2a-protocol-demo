@@ -1,6 +1,9 @@
 # Orchestrator configuration. Env vars override these (see internal/config).
 worker_url: "http://localhost:8081"
+# File for the A2A protocol trace (how the orchestrator calls the worker).
+# Kept off stdout so it does not clutter the REPL. Override with A2A_LOG_PATH.
+a2a_log_path: "a2a-orchestrator.log"
 llm:
-  base_url: "http://localhost:1234/v1"
-  model: "local-model"
+  base_url: "http://192.168.1.53:1234/v1"
+  model: "google/gemma-4-12b-qat"
   api_key: "lm-studio"

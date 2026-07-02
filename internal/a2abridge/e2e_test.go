@@ -21,7 +21,7 @@ func TestEndToEndRefundWithClarification(t *testing.T) {
 	// Reuse the existing in-process worker helper from client_test.go.
 	url := startWorker(t, workerModel)
 
-	oc, err := NewOrdersClient(context.Background(), url)
+	oc, err := NewOrdersClient(context.Background(), url, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

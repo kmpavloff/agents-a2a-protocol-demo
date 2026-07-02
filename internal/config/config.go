@@ -22,8 +22,9 @@ type WorkerConfig struct {
 }
 
 type OrchestratorConfig struct {
-	WorkerURL string    `yaml:"worker_url"`
-	LLM       LLMConfig `yaml:"llm"`
+	WorkerURL  string    `yaml:"worker_url"`
+	A2ALogPath string    `yaml:"a2a_log_path"` // file for A2A protocol trace; empty disables
+	LLM        LLMConfig `yaml:"llm"`
 }
 
 func env(key, cur string) string {
@@ -69,6 +70,10 @@ func LoadOrchestrator(path string) (OrchestratorConfig, error) {
 		return c, err
 	}
 	c.WorkerURL = env("WORKER_URL", c.WorkerURL)
+	c.A2ALogPath = env("A2A_LOG_PATH", c.A2ALogPath)
+	if c.A2ALogPath == "" {
+		c.A2ALogPath = "a2a-orchestrator.log"
+	}
 	c.LLM.applyEnv()
 	if c.WorkerURL == "" {
 		return c, fmt.Errorf("orchestrator config: worker_url is required")

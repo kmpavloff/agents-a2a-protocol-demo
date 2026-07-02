@@ -27,6 +27,48 @@ func TestGetOrderStatusNotFound(t *testing.T) {
 	}
 }
 
+func TestOrderIDToolsGuardEmptyID(t *testing.T) {
+	s := seed(t)
+	for _, tc := range []struct {
+		name string
+		fn   func(*Store, string) (string, error)
+	}{
+		{"get_order_status", getOrderStatus},
+		{"initiate_refund", initiateRefund},
+	} {
+		for _, id := range []string{"", "   ", "\t"} {
+			out, err := tc.fn(s, id)
+			if err != nil {
+				t.Fatalf("%s(%q): unexpected error: %v", tc.name, id, err)
+			}
+			if !strings.Contains(out, "Не указан номер заказа") {
+				t.Errorf("%s(%q): want missing-id hint, got %q", tc.name, id, out)
+			}
+		}
+	}
+}
+
+func TestIDArgsOrderIDAliases(t *testing.T) {
+	cases := []struct {
+		name string
+		args idArgs
+		want string
+	}{
+		{"order_id", idArgs{OrderID: "1041"}, "1041"},
+		{"order_number", idArgs{OrderNumber: "1041"}, "1041"},
+		{"number", idArgs{Number: "1041"}, "1041"},
+		{"id", idArgs{ID: "1041"}, "1041"},
+		{"trimmed", idArgs{OrderNumber: "  1041 "}, "1041"},
+		{"precedence_order_id_first", idArgs{OrderID: "1041", Number: "9999"}, "1041"},
+		{"all_empty", idArgs{}, ""},
+	}
+	for _, tc := range cases {
+		if got := tc.args.orderID(); got != tc.want {
+			t.Errorf("%s: orderID()=%q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestListRecentOrders(t *testing.T) {
 	s := seed(t)
 	out, err := listRecentOrders(s, "alice")
@@ -35,6 +77,40 @@ func TestListRecentOrders(t *testing.T) {
 	}
 	if !strings.Contains(out, "1055") || !strings.Contains(out, "1023") {
 		t.Errorf("want all alice orders listed, got %q", out)
+	}
+}
+
+func TestListRecentOrdersGuardsEmptyCustomer(t *testing.T) {
+	s := seed(t)
+	for _, c := range []string{"", "   ", "\t"} {
+		out, err := listRecentOrders(s, c)
+		if err != nil {
+			t.Fatalf("customer %q: unexpected error: %v", c, err)
+		}
+		if !strings.Contains(out, "Не указано имя клиента") {
+			t.Errorf("customer %q: want missing-customer hint, got %q", c, out)
+		}
+	}
+}
+
+func TestCustomerArgsAliases(t *testing.T) {
+	cases := []struct {
+		name string
+		args customerArgs
+		want string
+	}{
+		{"customer", customerArgs{Customer: "alice"}, "alice"},
+		{"customer_name", customerArgs{CustomerName: "alice"}, "alice"},
+		{"name", customerArgs{Name: "alice"}, "alice"},
+		{"client", customerArgs{Client: "alice"}, "alice"},
+		{"trimmed", customerArgs{Name: "  alice "}, "alice"},
+		{"precedence_customer_first", customerArgs{Customer: "alice", Name: "bob"}, "alice"},
+		{"all_empty", customerArgs{}, ""},
+	}
+	for _, tc := range cases {
+		if got := tc.args.customer(); got != tc.want {
+			t.Errorf("%s: customer()=%q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 

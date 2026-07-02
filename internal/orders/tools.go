@@ -25,7 +25,22 @@ func statusLabel(status string) string {
 	}
 }
 
+// missingOrderID guards against an empty/whitespace order_id. Some models emit
+// a probing tool call without the id even when the user gave one; instead of
+// looking up an empty id, return a hint (as a normal result, not an error) so
+// the model re-calls the tool with a concrete number.
+func missingOrderID(id string) (string, bool) {
+	if strings.TrimSpace(id) == "" {
+		return "Не указан номер заказа. Передайте order_id (например, 1041) и вызовите инструмент снова.", true
+	}
+	return "", false
+}
+
 func getOrderStatus(s *Store, id string) (string, error) {
+	if hint, missing := missingOrderID(id); missing {
+		return hint, nil
+	}
+	id = strings.TrimSpace(id)
 	o, ok := s.Get(id)
 	if !ok {
 		return fmt.Sprintf("Заказ %s не найден.", id), nil
@@ -34,6 +49,10 @@ func getOrderStatus(s *Store, id string) (string, error) {
 }
 
 func listRecentOrders(s *Store, customer string) (string, error) {
+	if strings.TrimSpace(customer) == "" {
+		return "Не указано имя клиента. Передайте customer (например, alice) и вызовите инструмент снова.", nil
+	}
+	customer = strings.TrimSpace(customer)
 	list := s.ByCustomer(customer)
 	if len(list) == 0 {
 		return fmt.Sprintf("Заказы для клиента %q не найдены.", customer), nil
@@ -55,6 +74,10 @@ func getSalesStats(s *Store, period string) (string, error) {
 }
 
 func initiateRefund(s *Store, id string) (string, error) {
+	if hint, missing := missingOrderID(id); missing {
+		return hint, nil
+	}
+	id = strings.TrimSpace(id)
 	o, err := s.Refund(id)
 	switch {
 	case errors.Is(err, ErrNotFound):
@@ -91,11 +114,45 @@ func findOrder(s *Store, query string) (string, error) {
 }
 
 // argument structs (adk derives the tool JSON schema from these)
+
+// idArgs accepts the order number under several key names because small models
+// often invent synonyms (order_number, number, id) instead of the documented
+// order_id. All fields are optional (omitempty) so none is schema-required; the
+// runtime guard reports a missing id with a helpful message instead.
 type idArgs struct {
-	OrderID string `json:"order_id" description:"Номер заказа, например 1041"`
+	OrderID     string `json:"order_id,omitempty" description:"Номер заказа, например 1041"`
+	OrderNumber string `json:"order_number,omitempty" description:"Синоним order_id (номер заказа)"`
+	Number      string `json:"number,omitempty" description:"Синоним order_id (номер заказа)"`
+	ID          string `json:"id,omitempty" description:"Синоним order_id (номер заказа)"`
 }
+
+// orderID returns the first non-empty, trimmed id-like field.
+func (a idArgs) orderID() string {
+	for _, v := range []string{a.OrderID, a.OrderNumber, a.Number, a.ID} {
+		if s := strings.TrimSpace(v); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+// customerArgs, like idArgs, accepts the client name under several key names
+// because small models often invent synonyms instead of the documented
+// customer. All fields are optional; the runtime guard reports a missing name.
 type customerArgs struct {
-	Customer string `json:"customer" description:"Имя клиента"`
+	Customer     string `json:"customer,omitempty" description:"Имя клиента, например alice"`
+	CustomerName string `json:"customer_name,omitempty" description:"Синоним customer (имя клиента)"`
+	Name         string `json:"name,omitempty" description:"Синоним customer (имя клиента)"`
+	Client       string `json:"client,omitempty" description:"Синоним customer (имя клиента)"`
+}
+
+// customer returns the first non-empty, trimmed client-name field.
+func (a customerArgs) customer() string {
+	for _, v := range []string{a.Customer, a.CustomerName, a.Name, a.Client} {
+		if s := strings.TrimSpace(v); s != "" {
+			return s
+		}
+	}
+	return ""
 }
 type periodArgs struct {
 	Period string `json:"period" description:"Период в формате ГГГГ-ММ"`
@@ -117,12 +174,12 @@ func Tools(s *Store) []tool.Tool {
 		mustTool(functiontool.New(functiontool.Config{Name: "find_order", Description: "Найти заказ по номеру или тексту названия товара."},
 			func(_ tool.Context, a queryArgs) (string, error) { return findOrder(s, a.Query) })),
 		mustTool(functiontool.New(functiontool.Config{Name: "get_order_status", Description: "Узнать статус заказа по его номеру."},
-			func(_ tool.Context, a idArgs) (string, error) { return getOrderStatus(s, a.OrderID) })),
-		mustTool(functiontool.New(functiontool.Config{Name: "list_recent_orders", Description: "Показать последние заказы клиента, новые сверху."},
-			func(_ tool.Context, a customerArgs) (string, error) { return listRecentOrders(s, a.Customer) })),
+			func(_ tool.Context, a idArgs) (string, error) { return getOrderStatus(s, a.orderID()) })),
+		mustTool(functiontool.New(functiontool.Config{Name: "list_recent_orders", Description: "Показать последние заказы клиента по его имени (например, alice), новые сверху."},
+			func(_ tool.Context, a customerArgs) (string, error) { return listRecentOrders(s, a.customer()) })),
 		mustTool(functiontool.New(functiontool.Config{Name: "get_sales_stats", Description: "Получить статистику продаж за период (ГГГГ-ММ)."},
 			func(_ tool.Context, a periodArgs) (string, error) { return getSalesStats(s, a.Period) })),
 		mustTool(functiontool.New(functiontool.Config{Name: "initiate_refund", Description: "Оформить возврат по заказу (по его номеру)."},
-			func(_ tool.Context, a idArgs) (string, error) { return initiateRefund(s, a.OrderID) })),
+			func(_ tool.Context, a idArgs) (string, error) { return initiateRefund(s, a.orderID()) })),
 	}
 }

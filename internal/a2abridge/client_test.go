@@ -41,7 +41,7 @@ func startWorker(t *testing.T, model *llm.Stub) string {
 	}
 
 	card := AgentCard(url)
-	handler := a2asrv.NewHandler(NewExecutor(r))
+	handler := a2asrv.NewHandler(NewExecutor(r, nil))
 
 	mux := http.NewServeMux()
 	mux.Handle("/invoke", a2asrv.NewJSONRPCHandler(handler))
@@ -54,6 +54,21 @@ func startWorker(t *testing.T, model *llm.Stub) string {
 	return url
 }
 
+func TestClientRejectsEmptyMessageWithoutA2ACall(t *testing.T) {
+	// A client with a nil a2a client would panic if ask actually made a call;
+	// the empty-message guard must return before any A2A round-trip.
+	c := &OrdersClient{pending: make(map[string]pending)}
+	for _, text := range []string{"", "   ", "\t\n"} {
+		out, err := c.ask(context.Background(), "sess", text)
+		if err != nil {
+			t.Fatalf("text %q: unexpected error: %v", text, err)
+		}
+		if !strings.Contains(out, "Пустой запрос") {
+			t.Fatalf("text %q: want empty-request hint, got %q", text, out)
+		}
+	}
+}
+
 func TestClientRelaysInputRequiredThenCompletes(t *testing.T) {
 	// First worker invocation asks for an order id; second resumes the same task.
 	model := llm.NewStub(
@@ -62,7 +77,7 @@ func TestClientRelaysInputRequiredThenCompletes(t *testing.T) {
 	)
 	url := startWorker(t, model)
 
-	c, err := NewOrdersClient(context.Background(), url)
+	c, err := NewOrdersClient(context.Background(), url, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
