@@ -62,3 +62,13 @@ func TestProfileFromCardNilSafe(t *testing.T) {
 		t.Errorf("nil card ToolDesc should still carry the NEEDS_USER_INPUT tail; got %q", p.ToolDesc)
 	}
 }
+
+func TestRealCardProfileMentionsExamples(t *testing.T) {
+	p := ProfileFromCard(AgentCard("http://localhost:8081"))
+	if !strings.Contains(p.ToolDesc, "1041") {
+		t.Errorf("real-card ToolDesc should include an example mentioning an order id; got %q", p.ToolDesc)
+	}
+	if p.ToolName != "ask_orders_agent" {
+		t.Errorf("real-card ToolName = %q, want ask_orders_agent", p.ToolName)
+	}
+}
