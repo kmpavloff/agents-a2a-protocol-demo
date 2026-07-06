@@ -39,7 +39,7 @@ func main() {
 	ordersTool := oc.Tool()
 	log.Printf("orchestrator tools (1):")
 	log.Printf("  - %s: %s", ordersTool.Name(), ordersTool.Description())
-	ag, err := agent.NewOrchestrator(model, ordersTool)
+	ag, err := agent.NewOrchestrator(model, ordersTool, oc.Profile().Summary)
 	if err != nil {
 		log.Fatalf("agent: %v", err)
 	}

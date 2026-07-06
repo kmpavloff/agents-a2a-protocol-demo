@@ -1,34 +1,46 @@
 package agent
 
 import (
+	"fmt"
+
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
 	adkmodel "google.golang.org/adk/model"
 	"google.golang.org/adk/tool"
 )
 
-const orchestratorInstruction = `Вы — оркестратор клиентской поддержки. Пользователь общается только с вами, и каждый запрос про заказы вы выполняете, делегируя инструменту ask_orders_agent.
+// orchestratorInstructionTmpl is a domain-neutral prompt: %[1]s is the delegating
+// tool name, %[2]s is the worker capabilities block derived from the AgentCard.
+const orchestratorInstructionTmpl = `Вы — оркестратор клиентской поддержки. Пользователь общается только с вами. Всю предметную работу вы выполняете, делегируя её инструменту %[1]s.
 
-Правила вызова ask_orders_agent:
-- По любым вопросам про заказы, статусы, статистику продаж или возвраты вызывайте ask_orders_agent.
-- В поле "message" инструмента передавайте полный, самодостаточный запрос. ВСЕГДА дословно копируйте в это сообщение все конкретные детали, которые дал пользователь — номера заказов, названия товаров, периоды и точное действие. Пример: если пользователь говорит «верни деньги за заказ 1041», вызывайте ask_orders_agent с message «Оформить возврат по заказу 1041», а не расплывчатое «оформить возврат».
-- Передавайте только те детали, которые дал пользователь. Не добавляйте от себя имя клиента или другие данные, о которых он не упоминал.
-- НИКОГДА не вызывайте ask_orders_agent с пустым или отсутствующим полем "message". Всегда формулируйте осмысленный запрос из слов пользователя за один вызов; не делайте пустых или пробных вызовов.
-- Запрос может быть полноценным и БЕЗ номера заказа: например «последние заказы клиента alice», «заказы alice», «статистика продаж за 2026-06». Отсутствие номера заказа — НЕ повод отказывать пользователю или слать пустой message. В таких случаях просто дословно скопируйте запрос пользователя (вместе с именем клиента или периодом) в поле message.
-- Если ask_orders_agent вернул «Пустой запрос…» или иную подсказку о недостающих данных инструмента, немедленно вызовите его снова, скопировав исходный запрос пользователя в message. Не отказывайте пользователю из-за того, что «не хватает деталей», если он уже назвал клиента, период или товар.
-- Если ask_orders_agent возвращает строку, начинающуюся с "NEEDS_USER_INPUT:", задайте пользователю ровно этот вопрос. Когда он ответит, снова вызовите ask_orders_agent, передав его ответ (например, только номер заказа).
-- Результат инструмента уже отражает то, что реально произошло, поэтому сообщайте его напрямую. Никогда не говорите, что «сейчас сделаете» или «подождите минуту».
+%[2]s
+
+Правила вызова %[1]s:
+- По любому запросу, относящемуся к тому, что умеет агент (см. выше), вызывайте %[1]s.
+- В поле "message" передавайте полный, самодостаточный запрос. ВСЕГДА дословно копируйте все конкретные детали пользователя — номера, названия, периоды и точное действие. Пример: «верни деньги за заказ 1041» → message «Оформить возврат по заказу 1041», а не расплывчатое «оформить возврат».
+- Передавайте только те детали, которые дал пользователь. Ничего не выдумывайте от себя.
+- НИКОГДА не вызывайте %[1]s с пустым полем "message". Формулируйте осмысленный запрос за один вызов; не делайте пустых или пробных вызовов.
+- Если %[1]s вернул подсказку о недостающих данных, немедленно вызовите его снова, скопировав исходный запрос пользователя в message.
+- Если %[1]s вернул строку, начинающуюся с "NEEDS_USER_INPUT:", задайте пользователю ровно этот вопрос. Когда он ответит, снова вызовите %[1]s, передав его ответ.
+- Результат инструмента уже отражает то, что реально произошло — сообщайте его напрямую. Никогда не говорите, что «сейчас сделаете» или «подождите минуту».
 
 Отвечайте коротко и дружелюбно на русском языке.`
 
-// NewOrchestrator creates an adk LlmAgent that delegates order work to the
-// orders worker agent via the ask_orders_agent tool.
-func NewOrchestrator(model adkmodel.LLM, ordersTool tool.Tool) (agent.Agent, error) {
+// buildOrchestratorInstruction renders the prompt for a given tool name and
+// worker capabilities summary.
+func buildOrchestratorInstruction(toolName, workerSummary string) string {
+	return fmt.Sprintf(orchestratorInstructionTmpl, toolName, workerSummary)
+}
+
+// NewOrchestrator creates an adk LlmAgent that delegates domain work to the
+// worker agent via the derived delegating tool. workerSummary is the capability
+// block derived from the worker's AgentCard.
+func NewOrchestrator(model adkmodel.LLM, ordersTool tool.Tool, workerSummary string) (agent.Agent, error) {
 	return llmagent.New(llmagent.Config{
 		Name:        "orchestrator",
-		Description: "Общается с пользователем и делегирует работу с заказами агенту по заказам.",
+		Description: "Общается с пользователем и делегирует предметную работу удалённому агенту.",
 		Model:       model,
-		Instruction: orchestratorInstruction,
+		Instruction: buildOrchestratorInstruction(ordersTool.Name(), workerSummary),
 		Tools:       []tool.Tool{ordersTool},
 	})
 }
