@@ -8,6 +8,7 @@ import (
 	"iter"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
@@ -187,26 +188,34 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 	}
 }
 
-// parseAffirmative interprets a free-text user reply to a yes/no confirmation.
-// Anything not clearly affirmative is treated as a refusal (safe default: no
-// money moves without an explicit "yes").
+// parseAffirmative interprets a free-text reply to a yes/no confirmation for a
+// money-moving refund. It fails CLOSED: the refund is approved only when the
+// reply contains an explicit affirmative token AND no negation token anywhere.
+// Any negation ("не", "нет", "ни", "да нет", ...) means refusal, even when the
+// reply also contains an affirmative morpheme ("я не подтверждаю", "да нет").
 func parseAffirmative(text string) bool {
-	t := strings.ToLower(strings.TrimSpace(text))
-	// Negation wins: a refusal is never an approval, even when it embeds an
-	// affirmative morpheme ("не подтверждаю", "не оформляй", "неа"). No valid
-	// affirmative reply begins with "не"/"нет".
-	if strings.HasPrefix(t, "не") {
-		return false
+	// Tokenize on any non-letter so punctuation can't hide a word ("да," → "да").
+	words := strings.FieldsFunc(strings.ToLower(strings.TrimSpace(text)), func(r rune) bool {
+		return !unicode.IsLetter(r)
+	})
+	negations := map[string]bool{
+		"не": true, "нет": true, "неа": true, "ни": true, "никогда": true,
+		"нельзя": true, "no": true, "not": true, "nope": true,
 	}
-	switch {
-	case t == "да" || t == "yes" || t == "y" || t == "ок" || t == "ok" || t == "ага" || t == "угу":
-		return true
-	case strings.HasPrefix(t, "да,") || strings.HasPrefix(t, "да ") || strings.HasPrefix(t, "yes"):
-		return true
-	case strings.Contains(t, "подтверж") || strings.Contains(t, "оформляй") || strings.Contains(t, "давай, оформ"):
-		return true
+	affirmatives := map[string]bool{
+		"да": true, "ага": true, "угу": true, "давай": true,
+		"yes": true, "y": true, "ок": true, "ok": true, "okay": true,
 	}
-	return false
+	affirmed := false
+	for _, w := range words {
+		if negations[w] {
+			return false
+		}
+		if affirmatives[w] || strings.HasPrefix(w, "подтвер") || strings.HasPrefix(w, "оформл") {
+			affirmed = true
+		}
+	}
+	return affirmed
 }
 
 // refundConfirmQuestion builds the Russian confirmation prompt from the original
