@@ -112,3 +112,21 @@ func TestClientRelaysInputRequiredThenCompletes(t *testing.T) {
 		t.Errorf("expected pending task cleared after completion, still have id %q", afterID)
 	}
 }
+
+func TestToolNameFromCard(t *testing.T) {
+	url := startWorker(t, llm.NewStub())
+	c, err := NewOrdersClient(context.Background(), url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tl := c.Tool()
+	if tl.Name() != "ask_orders_agent" {
+		t.Errorf("tool name = %q, want ask_orders_agent (derived from card)", tl.Name())
+	}
+	if !strings.Contains(tl.Description(), "NEEDS_USER_INPUT") {
+		t.Errorf("tool description should carry the NEEDS_USER_INPUT tail; got %q", tl.Description())
+	}
+	if c.Profile().ToolName != tl.Name() {
+		t.Errorf("Profile().ToolName %q != tool.Name() %q", c.Profile().ToolName, tl.Name())
+	}
+}
