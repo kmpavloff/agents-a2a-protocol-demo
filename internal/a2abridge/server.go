@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"iter"
 	"strings"
+	"sync"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/runner"
+	"google.golang.org/adk/tool/toolconfirmation"
 	"google.golang.org/genai"
 )
 
@@ -40,18 +42,22 @@ func compactArgs(args map[string]any) string {
 type executor struct {
 	runner *runner.Runner
 	trace  *Tracer
+
+	mu             sync.Mutex
+	pendingConfirm map[string]string // A2A contextID → adk_request_confirmation call ID
 }
 
 // NewExecutor wraps an adk Runner as an a2asrv.AgentExecutor.
 // trace may be nil to disable protocol tracing.
 func NewExecutor(r *runner.Runner, trace *Tracer) a2asrv.AgentExecutor {
-	return &executor{runner: r, trace: trace}
+	return &executor{runner: r, trace: trace, pendingConfirm: make(map[string]string)}
 }
 
 // Execute implements a2asrv.AgentExecutor.
 func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {
 	return func(yield func(a2a.Event, error) bool) {
 		newTask := ec.StoredTask == nil
+		sessionID := ec.ContextID // = A2A contextID for history continuity across turns
 		e.trace.Logf("▶ incoming A2A request | contextID=%s newTask=%v", ec.ContextID, newTask)
 
 		// 1. Emit a submitted task if this is a new task.
@@ -70,18 +76,47 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 			return
 		}
 
-		// 3. Extract user text and run the adk runner.
+		// 3. Build the runner input. If a confirmation is pending for this session,
+		//    this turn carries the user's yes/no answer, not a fresh request.
 		var userText string
 		if ec.Message != nil && len(ec.Message.Parts) > 0 {
 			userText = ec.Message.Parts[0].Text()
 		}
-		e.trace.Logf("  user text=%q — running orders agent (LLM + tools)", userText)
 
-		// sessionID = A2A contextID for history continuity across turns.
-		sessionID := ec.ContextID
-		msg := genai.NewContentFromText(userText, genai.RoleUser)
+		e.mu.Lock()
+		confirmCallID, awaitingConfirm := e.pendingConfirm[sessionID]
+		if awaitingConfirm {
+			delete(e.pendingConfirm, sessionID)
+		}
+		e.mu.Unlock()
 
-		var finalText string
+		var msg *genai.Content
+		if awaitingConfirm {
+			approved := parseAffirmative(userText)
+			e.trace.Logf("  confirmation answer=%q → approved=%v", userText, approved)
+			if !approved {
+				// Short-circuit: never feed a rejection to adk (avoids the
+				// ErrConfirmationRejected tool-error path); tell the user directly.
+				e.trace.Logf("  → emit: artifact + completed | refund declined by user")
+				if !yield(a2a.NewArtifactEvent(ec, a2a.NewTextPart("Возврат отменён по вашему решению.")), nil) {
+					return
+				}
+				yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateCompleted, nil), nil)
+				return
+			}
+			fr := &genai.FunctionResponse{
+				Name:     toolconfirmation.FunctionCallName,
+				ID:       confirmCallID,
+				Response: map[string]any{"confirmed": true},
+			}
+			msg = &genai.Content{Role: string(genai.RoleUser), Parts: []*genai.Part{{FunctionResponse: fr}}}
+		} else {
+			e.trace.Logf("  user text=%q — running orders agent (LLM + tools)", userText)
+			msg = genai.NewContentFromText(userText, genai.RoleUser)
+		}
+
+		// 4. Run the adk runner, watching for a HITL confirmation request.
+		var finalText, confirmQuestion, capturedCallID string
 		e.trace.Logf("%s  · агент → LLM: запрос%s", gray, reset)
 		for event, err := range e.runner.Run(ctx, "a2a-user", sessionID, msg, agent.RunConfig{}) {
 			if err != nil {
@@ -94,12 +129,21 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 			}
 			for _, p := range event.Content.Parts {
 				switch {
+				case p.FunctionCall != nil && p.FunctionCall.Name == toolconfirmation.FunctionCallName:
+					// adk asks for human approval before running a guarded tool.
+					capturedCallID = p.FunctionCall.ID
+					orig, oerr := toolconfirmation.OriginalCallFrom(p.FunctionCall)
+					if oerr != nil {
+						e.trace.Logf("  ✖ OriginalCallFrom: %v", oerr)
+						confirmQuestion = "Подтвердите выполнение действия? (да/нет)"
+					} else {
+						confirmQuestion = refundConfirmQuestion(orig)
+					}
+					e.trace.Logf("  ⏸ tool confirmation requested | callID=%s question=%q", capturedCallID, confirmQuestion)
 				case p.FunctionCall != nil:
-					// LLM решило, какой инструмент по заказам вызвать.
 					e.trace.Logf("%s  · LLM → агент: вызвать %s(%s)%s",
 						gray, p.FunctionCall.Name, compactArgs(p.FunctionCall.Args), reset)
 				case p.FunctionResponse != nil:
-					// Результат инструмента уходит обратно в LLM.
 					e.trace.Logf("%s  · инструмент %s → LLM: результат, снова спрашиваю LLM%s",
 						gray, p.FunctionResponse.Name, reset)
 				case p.Text != "":
@@ -108,7 +152,18 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 			}
 		}
 
-		// 4. Check for NEED_INPUT sentinel.
+		// 5. Confirmation requested → pause the task as input-required.
+		if capturedCallID != "" {
+			e.mu.Lock()
+			e.pendingConfirm[sessionID] = capturedCallID
+			e.mu.Unlock()
+			e.trace.Logf("  → emit: input-required (confirmation) | question=%q", confirmQuestion)
+			ask := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart(confirmQuestion))
+			yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateInputRequired, ask), nil)
+			return
+		}
+
+		// 6. Check for the NEED_INPUT clarification sentinel.
 		trimmed := strings.TrimSpace(finalText)
 		e.trace.Logf("  agent produced finalText=%q", trimmed)
 		if strings.HasPrefix(trimmed, needInputPrefix) {
@@ -119,8 +174,7 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 			return
 		}
 
-		// 5. Emit artifact + completed.
-		// Guard against an empty finalText so we never emit a blank artifact.
+		// 7. Emit artifact + completed. Guard against an empty finalText.
 		artifactText := trimmed
 		if artifactText == "" {
 			artifactText = "Готово."
@@ -131,6 +185,42 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 		}
 		yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateCompleted, nil), nil)
 	}
+}
+
+// parseAffirmative interprets a free-text user reply to a yes/no confirmation.
+// Anything not clearly affirmative is treated as a refusal (safe default: no
+// money moves without an explicit "yes").
+func parseAffirmative(text string) bool {
+	t := strings.ToLower(strings.TrimSpace(text))
+	switch {
+	case t == "да" || t == "yes" || t == "y" || t == "ок" || t == "ok" || t == "ага" || t == "угу":
+		return true
+	case strings.HasPrefix(t, "да,") || strings.HasPrefix(t, "да ") || strings.HasPrefix(t, "yes"):
+		return true
+	case strings.Contains(t, "подтверж") || strings.Contains(t, "оформляй") || strings.Contains(t, "давай, оформ"):
+		return true
+	}
+	return false
+}
+
+// refundConfirmQuestion builds the Russian confirmation prompt from the original
+// initiate_refund call captured inside the adk_request_confirmation event.
+func refundConfirmQuestion(orig *genai.FunctionCall) string {
+	id := ""
+	if orig != nil && orig.Args != nil {
+		for _, k := range []string{"order_id", "order_number", "number", "id"} {
+			if v, ok := orig.Args[k]; ok {
+				if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+					id = strings.TrimSpace(s)
+					break
+				}
+			}
+		}
+	}
+	if id != "" {
+		return fmt.Sprintf("Подтвердите оформление возврата по заказу %s? (да/нет)", id)
+	}
+	return "Подтвердите оформление возврата? (да/нет)"
 }
 
 // Cancel implements a2asrv.AgentExecutor.

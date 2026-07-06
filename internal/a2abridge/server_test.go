@@ -125,3 +125,61 @@ func runExecutorCollect(t *testing.T, exec a2asrv.AgentExecutor, text string) ([
 	return states, artifactText.String()
 }
 
+func TestParseAffirmative(t *testing.T) {
+	for _, yes := range []string{"да", "Да", " да, оформляй ", "yes", "подтверждаю", "ок"} {
+		if !parseAffirmative(yes) {
+			t.Errorf("parseAffirmative(%q) = false, want true", yes)
+		}
+	}
+	for _, no := range []string{"нет", "не надо", "отмена", ""} {
+		if parseAffirmative(no) {
+			t.Errorf("parseAffirmative(%q) = true, want false", no)
+		}
+	}
+}
+
+// runExecutorInputRequired runs one turn and returns the final state plus the
+// input-required status-message text (the question shown to the user).
+func runExecutorInputRequired(t *testing.T, exec a2asrv.AgentExecutor, text string) (a2a.TaskState, string) {
+	t.Helper()
+	ctx := context.Background()
+	msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(text))
+	ec := &a2asrv.ExecutorContext{Message: msg, TaskID: a2a.TaskID("t1"), ContextID: "c1"}
+
+	var last a2a.TaskState
+	var question string
+	for event, err := range exec.Execute(ctx, ec) {
+		if err != nil {
+			t.Fatalf("executor error: %v", err)
+		}
+		if e, ok := event.(*a2a.TaskStatusUpdateEvent); ok {
+			last = e.Status.State
+			if e.Status.State == a2a.TaskStateInputRequired && e.Status.Message != nil && len(e.Status.Message.Parts) > 0 {
+				question = e.Status.Message.Parts[0].Text()
+			}
+		}
+	}
+	return last, question
+}
+
+func TestExecutorRequestsRefundConfirmation(t *testing.T) {
+	store := seedStore(t)
+	// The stub drives the worker LLM to call initiate_refund for order 1041.
+	model := llm.NewStub(
+		llm.StubTurn{Call: &genai.FunctionCall{Name: "initiate_refund", Args: map[string]any{"order_id": "1041"}}},
+	)
+	exec := NewExecutor(newTestRunner(t, model, store), nil)
+
+	state, question := runExecutorInputRequired(t, exec, "оформи возврат по заказу 1041")
+	if state != a2a.TaskStateInputRequired {
+		t.Fatalf("want input-required, got %v", state)
+	}
+	if !strings.Contains(question, "1041") || !strings.Contains(strings.ToLower(question), "подтверд") {
+		t.Errorf("confirmation question should ask to confirm order 1041; got %q", question)
+	}
+	// The refund must NOT have happened yet (no confirmation given).
+	if o, _ := store.Get("1041"); o.Status == "refunded" {
+		t.Error("refund executed before confirmation")
+	}
+}
+
