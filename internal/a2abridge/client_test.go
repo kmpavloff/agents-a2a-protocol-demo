@@ -10,14 +10,17 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
+	"google.golang.org/adk/tool"
 
 	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/agent"
 	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/llm"
+	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/orders"
 )
 
-// startWorker binds a real listener first so we know the URL before building
-// the AgentCard (which must embed the same URL in SupportedInterfaces).
-func startWorker(t *testing.T, model *llm.Stub) string {
+// startWorkerServer binds a real listener, wires an adk worker (with the given
+// tools) behind an A2A JSON-RPC handler + AgentCard, and returns its base URL.
+// Binding first lets the AgentCard embed the same URL in SupportedInterfaces.
+func startWorkerServer(t *testing.T, model *llm.Stub, tools []tool.Tool) string {
 	t.Helper()
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -26,7 +29,7 @@ func startWorker(t *testing.T, model *llm.Stub) string {
 	}
 	url := "http://" + ln.Addr().String()
 
-	ag, agErr := agent.NewWorker(model, nil) // tools not needed; stub drives behaviour
+	ag, agErr := agent.NewWorker(model, tools)
 	if agErr != nil {
 		t.Fatal(agErr)
 	}
@@ -52,6 +55,19 @@ func startWorker(t *testing.T, model *llm.Stub) string {
 	t.Cleanup(func() { srv.Close() })
 
 	return url
+}
+
+// startWorker starts a worker with no tools; the stub drives behaviour.
+func startWorker(t *testing.T, model *llm.Stub) string {
+	t.Helper()
+	return startWorkerServer(t, model, nil)
+}
+
+// startWorkerWithTools starts a worker with the real order tools bound to store,
+// so tool side effects (e.g. refunds) are observable in tests.
+func startWorkerWithTools(t *testing.T, model *llm.Stub, store *orders.Store) string {
+	t.Helper()
+	return startWorkerServer(t, model, orders.Tools(store))
 }
 
 func TestClientRejectsEmptyMessageWithoutA2ACall(t *testing.T) {
