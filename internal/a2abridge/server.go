@@ -192,6 +192,12 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 // money moves without an explicit "yes").
 func parseAffirmative(text string) bool {
 	t := strings.ToLower(strings.TrimSpace(text))
+	// Negation wins: a refusal is never an approval, even when it embeds an
+	// affirmative morpheme ("не подтверждаю", "не оформляй", "неа"). No valid
+	// affirmative reply begins with "не"/"нет".
+	if strings.HasPrefix(t, "не") {
+		return false
+	}
 	switch {
 	case t == "да" || t == "yes" || t == "y" || t == "ок" || t == "ok" || t == "ага" || t == "угу":
 		return true

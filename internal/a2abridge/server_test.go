@@ -131,7 +131,7 @@ func TestParseAffirmative(t *testing.T) {
 			t.Errorf("parseAffirmative(%q) = false, want true", yes)
 		}
 	}
-	for _, no := range []string{"нет", "не надо", "отмена", ""} {
+	for _, no := range []string{"нет", "не надо", "отмена", "", "не подтверждаю", "не оформляй", "неа"} {
 		if parseAffirmative(no) {
 			t.Errorf("parseAffirmative(%q) = true, want false", no)
 		}
