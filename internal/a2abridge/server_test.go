@@ -126,12 +126,18 @@ func runExecutorCollect(t *testing.T, exec a2asrv.AgentExecutor, text string) ([
 }
 
 func TestParseAffirmative(t *testing.T) {
-	for _, yes := range []string{"да", "Да", " да, оформляй ", "yes", "подтверждаю", "ок"} {
+	for _, yes := range []string{"да", "Да", " да, оформляй ", "yes", "подтверждаю", "ок", "давай", "ОК", "подтверждаю."} {
 		if !parseAffirmative(yes) {
 			t.Errorf("parseAffirmative(%q) = false, want true", yes)
 		}
 	}
-	for _, no := range []string{"нет", "не надо", "отмена", "", "не подтверждаю", "не оформляй", "неа", "я не подтверждаю", "никогда не подтвержу", "ни за что не оформляй", "да нет", "да нет наверное"} {
+	for _, no := range []string{
+		"нет", "не надо", "отмена", "", "не подтверждаю", "не оформляй", "неа",
+		"я не подтверждаю", "никогда не подтвержу", "ни за что не оформляй",
+		"да нет", "да нет наверное", "давай отменим", "да, отмени", "давай потом",
+		"давай в другой раз", "ага, отмени", "да ну его", "передумал", "не сейчас",
+		"лучше не надо", "пожалуй нет",
+	} {
 		if parseAffirmative(no) {
 			t.Errorf("parseAffirmative(%q) = true, want false", no)
 		}
