@@ -688,20 +688,39 @@ func NewExecutor(r *runner.Runner, trace *Tracer) a2asrv.AgentExecutor {
 Add helpers at the bottom of the file:
 
 ```go
-// parseAffirmative interprets a free-text user reply to a yes/no confirmation.
-// Anything not clearly affirmative is treated as a refusal (safe default: no
-// money moves without an explicit "yes").
+// parseAffirmative interprets a free-text reply to a yes/no confirmation for a
+// money-moving refund. It fails CLOSED via an allowlist: the refund is approved
+// only when the reply is non-empty and EVERY word is a recognised affirmative or
+// confirm word. Any unrecognised token — a cancel/deferral verb ("отмени",
+// "потом"), a negation ("не", "нет"), or a hedge ("наверное") — makes the whole
+// reply a refusal. New ways of saying "no" are rejected by default instead of
+// slipping through, which is the safe posture for moving money.
+//
+// NOTE: an earlier substring/negation-blocklist heuristic was rejected in
+// review as fail-open ("я не подтверждаю", "давай отменим", "да, отмени" all
+// approved). Do not reintroduce it — allowlist-consensus is the safe form.
 func parseAffirmative(text string) bool {
-	t := strings.ToLower(strings.TrimSpace(text))
-	switch {
-	case t == "да" || t == "yes" || t == "y" || t == "ок" || t == "ok" || t == "ага" || t == "угу":
-		return true
-	case strings.HasPrefix(t, "да,") || strings.HasPrefix(t, "да ") || strings.HasPrefix(t, "yes"):
-		return true
-	case strings.Contains(t, "подтверж") || strings.Contains(t, "оформляй") || strings.Contains(t, "давай, оформ"):
-		return true
+	words := strings.FieldsFunc(strings.ToLower(strings.TrimSpace(text)), func(r rune) bool {
+		return !unicode.IsLetter(r)
+	})
+	if len(words) == 0 {
+		return false
 	}
-	return false
+	affirmative := func(w string) bool {
+		switch w {
+		case "да", "ага", "угу", "давай", "конечно", "ладно", "хорошо",
+			"yes", "yeah", "yep", "y", "ок", "ok", "okay":
+			return true
+		}
+		// Confirm/refund verbs: подтверждаю/подтверди/подтверждай, оформляй/оформи.
+		return strings.HasPrefix(w, "подтвер") || strings.HasPrefix(w, "оформ")
+	}
+	for _, w := range words {
+		if !affirmative(w) {
+			return false
+		}
+	}
+	return true
 }
 
 // refundConfirmQuestion builds the Russian confirmation prompt from the original
