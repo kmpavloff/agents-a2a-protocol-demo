@@ -132,6 +132,9 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 				switch {
 				case p.FunctionCall != nil && p.FunctionCall.Name == toolconfirmation.FunctionCallName:
 					// adk asks for human approval before running a guarded tool.
+					// A turn is expected to carry at most one confirmation request
+					// (initiate_refund is the only guarded tool); if several ever
+					// appeared, only the last is paused on — acceptable for this demo.
 					capturedCallID = p.FunctionCall.ID
 					orig, oerr := toolconfirmation.OriginalCallFrom(p.FunctionCall)
 					if oerr != nil {

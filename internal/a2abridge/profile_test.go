@@ -61,6 +61,11 @@ func TestProfileFromCardNilSafe(t *testing.T) {
 	if !strings.Contains(p.ToolDesc, "NEEDS_USER_INPUT") {
 		t.Errorf("nil card ToolDesc should still carry the NEEDS_USER_INPUT tail; got %q", p.ToolDesc)
 	}
+	// Summary must degrade to the generic capabilities header without panicking
+	// on the empty skills list.
+	if !strings.Contains(p.Summary, "агент") || !strings.Contains(p.Summary, "умеет") {
+		t.Errorf("nil card Summary should degrade to a generic capabilities header; got %q", p.Summary)
+	}
 }
 
 func TestRealCardProfileMentionsExamples(t *testing.T) {

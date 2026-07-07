@@ -24,8 +24,10 @@ const needsInputTail = "Если он вернёт NEEDS_USER_INPUT, задай�
 var nonAlnum = regexp.MustCompile(`[^a-zA-Z0-9]+`)
 
 // sanitizeToolName turns a card name into a valid function-tool name of the form
-// ask_<slug>. Non-alphanumeric runs collapse to "_"; an empty result falls back
-// to "ask_agent".
+// ask_<slug>. Function-tool names must match ^[a-zA-Z_][a-zA-Z0-9_]*$, so only
+// ASCII letters/digits may survive: non-alphanumeric runs collapse to "_", and a
+// name with no usable ASCII (e.g. a purely Cyrillic name) intentionally falls
+// back to the generic "ask_agent" rather than emitting an invalid identifier.
 func sanitizeToolName(name string) string {
 	slug := strings.Trim(nonAlnum.ReplaceAllString(name, "_"), "_")
 	if slug == "" {

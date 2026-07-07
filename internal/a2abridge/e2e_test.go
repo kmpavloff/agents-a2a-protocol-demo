@@ -90,6 +90,11 @@ func TestEndToEndRefundConfirmed(t *testing.T) {
 		t.Fatalf("turn 1 should ask to confirm order 1041, got %q", r1)
 	}
 
+	// The refund must NOT be applied until the user actually confirms.
+	if o, ok := store.Get("1041"); !ok || o.Status == "refunded" {
+		t.Fatalf("order 1041 must be present and NOT yet refunded before confirmation; ok=%v status=%q", ok, o.Status)
+	}
+
 	r2, err := oc.ask(context.Background(), sess, "да")
 	if err != nil {
 		t.Fatal(err)
@@ -97,7 +102,11 @@ func TestEndToEndRefundConfirmed(t *testing.T) {
 	if !strings.Contains(r2, "оформлен") {
 		t.Fatalf("turn 2 should complete the refund, got %q", r2)
 	}
-	if o, _ := store.Get("1041"); o.Status != "refunded" {
+	o, ok := store.Get("1041")
+	if !ok {
+		t.Fatal("order 1041 missing from store")
+	}
+	if o.Status != "refunded" {
 		t.Errorf("store should show order 1041 refunded, got status %q", o.Status)
 	}
 }
@@ -115,9 +124,14 @@ func TestEndToEndRefundDeclined(t *testing.T) {
 	}
 	sess := "conf-no"
 
-	if _, err := oc.ask(context.Background(), sess, "оформи возврат по заказу 1041"); err != nil {
+	r1, err := oc.ask(context.Background(), sess, "оформи возврат по заказу 1041")
+	if err != nil {
 		t.Fatal(err)
 	}
+	if !strings.HasPrefix(r1, "NEEDS_USER_INPUT:") || !strings.Contains(r1, "1041") {
+		t.Fatalf("turn 1 should ask to confirm order 1041, got %q", r1)
+	}
+
 	r2, err := oc.ask(context.Background(), sess, "нет, не надо")
 	if err != nil {
 		t.Fatal(err)
@@ -125,7 +139,11 @@ func TestEndToEndRefundDeclined(t *testing.T) {
 	if !strings.Contains(strings.ToLower(r2), "отмен") {
 		t.Fatalf("declining should report the refund was cancelled, got %q", r2)
 	}
-	if o, _ := store.Get("1041"); o.Status == "refunded" {
+	o, ok := store.Get("1041")
+	if !ok {
+		t.Fatal("order 1041 missing from store")
+	}
+	if o.Status == "refunded" {
 		t.Error("refund must NOT have executed after the user declined")
 	}
 }
