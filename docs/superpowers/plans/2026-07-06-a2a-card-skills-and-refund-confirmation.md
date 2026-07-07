@@ -688,20 +688,39 @@ func NewExecutor(r *runner.Runner, trace *Tracer) a2asrv.AgentExecutor {
 Add helpers at the bottom of the file:
 
 ```go
-// parseAffirmative interprets a free-text user reply to a yes/no confirmation.
-// Anything not clearly affirmative is treated as a refusal (safe default: no
-// money moves without an explicit "yes").
+// parseAffirmative interprets a free-text reply to a yes/no confirmation for a
+// money-moving refund. It fails CLOSED via an allowlist: the refund is approved
+// only when the reply is non-empty and EVERY word is a recognised affirmative or
+// confirm word. Any unrecognised token — a cancel/deferral verb ("отмени",
+// "потом"), a negation ("не", "нет"), or a hedge ("наверное") — makes the whole
+// reply a refusal. New ways of saying "no" are rejected by default instead of
+// slipping through, which is the safe posture for moving money.
+//
+// NOTE: an earlier substring/negation-blocklist heuristic was rejected in
+// review as fail-open ("я не подтверждаю", "давай отменим", "да, отмени" all
+// approved). Do not reintroduce it — allowlist-consensus is the safe form.
 func parseAffirmative(text string) bool {
-	t := strings.ToLower(strings.TrimSpace(text))
-	switch {
-	case t == "да" || t == "yes" || t == "y" || t == "ок" || t == "ok" || t == "ага" || t == "угу":
-		return true
-	case strings.HasPrefix(t, "да,") || strings.HasPrefix(t, "да ") || strings.HasPrefix(t, "yes"):
-		return true
-	case strings.Contains(t, "подтверж") || strings.Contains(t, "оформляй") || strings.Contains(t, "давай, оформ"):
-		return true
+	words := strings.FieldsFunc(strings.ToLower(strings.TrimSpace(text)), func(r rune) bool {
+		return !unicode.IsLetter(r)
+	})
+	if len(words) == 0 {
+		return false
 	}
-	return false
+	affirmative := func(w string) bool {
+		switch w {
+		case "да", "ага", "угу", "давай", "конечно", "ладно", "хорошо",
+			"yes", "yeah", "yep", "y", "ок", "ok", "okay":
+			return true
+		}
+		// Confirm/refund verbs: подтверждаю/подтверди/подтверждай, оформляй/оформи.
+		return strings.HasPrefix(w, "подтвер") || strings.HasPrefix(w, "оформ")
+	}
+	for _, w := range words {
+		if !affirmative(w) {
+			return false
+		}
+	}
+	return true
 }
 
 // refundConfirmQuestion builds the Russian confirmation prompt from the original
@@ -882,22 +901,29 @@ git commit -m "feat(a2a): bridge adk tool confirmation to A2A input-required"
 ### Task 7: E2E подтверждение возврата + документация
 
 **Files:**
-- Modify: `internal/a2abridge/client_test.go` (add `startWorkerWithTools` helper)
+- Modify: `internal/a2abridge/client_test.go` (refactor `startWorker` to share a helper; add `startWorkerWithTools`)
 - Test: `internal/a2abridge/e2e_test.go` (add `TestEndToEndRefundConfirmed`, `TestEndToEndRefundDeclined`)
 - Modify: `README.md` (document card-driven discovery + refund confirmation)
 
 **Interfaces:**
-- Consumes: `NewOrdersClient`, `oc.ask`, `orders.Load`/`orders.Tools`, `startWorkerWithTools`.
-- Produces: `func startWorkerWithTools(t *testing.T, model *llm.Stub, store *orders.Store) string`.
+- Consumes: `NewOrdersClient`, `oc.ask`, `orders.Load`/`orders.Tools`, `startWorkerWithTools`, existing `agent`/`runner`/`session`/`a2asrv` imports in `client_test.go`.
+- Produces:
+  - `func startWorkerServer(t *testing.T, model *llm.Stub, tools []tool.Tool) string` (shared wiring)
+  - `func startWorkerWithTools(t *testing.T, model *llm.Stub, store *orders.Store) string`
+  - `startWorker` refactored to delegate: `startWorkerServer(t, model, nil)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Refactor `startWorker` and add the tools helper (no duplication)**
 
-Add the helper to `internal/a2abridge/client_test.go` (import `"github.com/kmpavloff/agents-a2a-protocol-demo/internal/orders"`):
+The existing `startWorker` in `internal/a2abridge/client_test.go` and the new
+tools-aware helper differ only in the tools slice. Extract the shared server
+wiring into `startWorkerServer` and make both a thin wrapper. Replace the whole
+existing `startWorker` function with:
 
 ```go
-// startWorkerWithTools is like startWorker but registers the real order tools
-// bound to store, so tool side effects (e.g. refunds) are observable in tests.
-func startWorkerWithTools(t *testing.T, model *llm.Stub, store *orders.Store) string {
+// startWorkerServer binds a real listener, wires an adk worker (with the given
+// tools) behind an A2A JSON-RPC handler + AgentCard, and returns its base URL.
+// Binding first lets the AgentCard embed the same URL in SupportedInterfaces.
+func startWorkerServer(t *testing.T, model *llm.Stub, tools []tool.Tool) string {
 	t.Helper()
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -906,7 +932,7 @@ func startWorkerWithTools(t *testing.T, model *llm.Stub, store *orders.Store) st
 	}
 	url := "http://" + ln.Addr().String()
 
-	ag, agErr := agent.NewWorker(model, orders.Tools(store))
+	ag, agErr := agent.NewWorker(model, tools)
 	if agErr != nil {
 		t.Fatal(agErr)
 	}
@@ -933,7 +959,24 @@ func startWorkerWithTools(t *testing.T, model *llm.Stub, store *orders.Store) st
 
 	return url
 }
+
+// startWorker starts a worker with no tools; the stub drives behaviour.
+func startWorker(t *testing.T, model *llm.Stub) string {
+	t.Helper()
+	return startWorkerServer(t, model, nil)
+}
+
+// startWorkerWithTools starts a worker with the real order tools bound to store,
+// so tool side effects (e.g. refunds) are observable in tests.
+func startWorkerWithTools(t *testing.T, model *llm.Stub, store *orders.Store) string {
+	t.Helper()
+	return startWorkerServer(t, model, orders.Tools(store))
+}
 ```
+
+Add the needed imports to `internal/a2abridge/client_test.go`:
+`"google.golang.org/adk/tool"` and
+`"github.com/kmpavloff/agents-a2a-protocol-demo/internal/orders"`.
 
 Add the e2e tests to `internal/a2abridge/e2e_test.go` (imports: `context`, `os`, `strings`, `testing`, `google.golang.org/genai`, `internal/llm`, `internal/orders`):
 

@@ -161,6 +161,11 @@ type queryArgs struct {
 	Query string `json:"query" description:"Произвольный текст для поиска заказа"`
 }
 
+// refundNeedsConfirmation gates the HITL confirmation for initiate_refund: only
+// a call that carries a concrete order id triggers a confirmation request, so a
+// model's empty probing call does not spam the user with confirmations.
+func refundNeedsConfirmation(a idArgs) bool { return a.orderID() != "" }
+
 func mustTool(t tool.Tool, err error) tool.Tool {
 	if err != nil {
 		panic(err)
@@ -179,7 +184,11 @@ func Tools(s *Store) []tool.Tool {
 			func(_ tool.Context, a customerArgs) (string, error) { return listRecentOrders(s, a.customer()) })),
 		mustTool(functiontool.New(functiontool.Config{Name: "get_sales_stats", Description: "Получить статистику продаж за период (ГГГГ-ММ)."},
 			func(_ tool.Context, a periodArgs) (string, error) { return getSalesStats(s, a.Period) })),
-		mustTool(functiontool.New(functiontool.Config{Name: "initiate_refund", Description: "Оформить возврат по заказу (по его номеру)."},
+		mustTool(functiontool.New(functiontool.Config{
+			Name:                        "initiate_refund",
+			Description:                 "Оформить возврат по заказу (по его номеру).",
+			RequireConfirmationProvider: refundNeedsConfirmation,
+		},
 			func(_ tool.Context, a idArgs) (string, error) { return initiateRefund(s, a.orderID()) })),
 	}
 }

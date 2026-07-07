@@ -2,7 +2,7 @@
 
 A minimal, self-contained demo of the **Agent-to-Agent (A2A) protocol** using two
 Go agents. The orchestrator talks to the user through a terminal REPL; the worker
-handles order-management tasks via mock tools. The demo highlights three things:
+handles order-management tasks via mock tools. The demo highlights four things:
 
 1. **Agent delegation over A2A** — the orchestrator treats the remote worker as an
    `ask_orders_agent` tool backed by a live JSON-RPC / SSE channel.
@@ -12,6 +12,10 @@ handles order-management tasks via mock tools. The demo highlights three things:
    it suspends the A2A task with the canonical `input-required` status; the orchestrator
    relays the question to the user, collects the answer, and resumes the **same** task
    so the worker can complete the refund.
+4. **Human-in-the-Loop refund confirmation** — `initiate_refund` never fires blindly:
+   it pauses the A2A task in `input-required` asking the user to confirm, the
+   orchestrator relays that yes/no question, and the refund executes only once the
+   user replies with an explicit "да".
 
 Both agents use a local LLM served by [LM Studio](https://lmstudio.ai/) (OpenAI-compatible
 API).
@@ -38,7 +42,10 @@ flowchart LR
 The orchestrator is an `adk-go` `LlmAgent` with one custom tool `ask_orders_agent`.
 That tool holds an `a2aclient.Client` pointing at the worker and stores any pending
 `taskId`/`contextId` so it can resume the same task after the user provides
-clarification.
+clarification. The tool's name and description are not hardcoded — they are
+**derived from the worker's AgentCard** at startup, fetched via A2A capability
+discovery (`GET /.well-known/agent-card.json`), so the orchestrator adapts to
+whatever the worker advertises.
 
 The worker runs an `a2aproject/a2a-go` HTTP server. Its `AgentExecutor` wraps an
 `adk-go` `LlmAgent` that has the five order tools registered. The AgentCard is

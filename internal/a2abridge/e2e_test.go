@@ -2,10 +2,14 @@ package a2abridge
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
+	"google.golang.org/genai"
+
 	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/llm"
+	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/orders"
 )
 
 // TestEndToEndRefundWithClarification exercises the full orchestrator→worker
@@ -44,5 +48,84 @@ func TestEndToEndRefundWithClarification(t *testing.T) {
 	}
 	if !strings.Contains(r2, "оформлен") {
 		t.Fatalf("turn 2 should complete refund, got %q", r2)
+	}
+}
+
+// e2eStore seeds a refundable order 1041 for the confirmation flow.
+func e2eStore(t *testing.T) *orders.Store {
+	t.Helper()
+	p := t.TempDir() + "/o.json"
+	body := `{"orders":[{"id":"1041","customer":"alice","item":"Хаб","amount":34.5,"currency":"EUR","status":"delivered","created":"2026-06-10","refundable":true}],"sales_stats":[]}`
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := orders.Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func TestEndToEndRefundConfirmed(t *testing.T) {
+	store := e2eStore(t)
+	// Turn 1: LLM calls initiate_refund → adk requests confirmation.
+	// Turn 2 (after "да"): adk executes the refund → LLM summarizes.
+	model := llm.NewStub(
+		llm.StubTurn{Call: &genai.FunctionCall{Name: "initiate_refund", Args: map[string]any{"order_id": "1041"}}},
+		llm.StubTurn{Text: "Возврат по заказу 1041 оформлен."},
+	)
+	url := startWorkerWithTools(t, model, store)
+
+	oc, err := NewOrdersClient(context.Background(), url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := "conf-yes"
+
+	r1, err := oc.ask(context.Background(), sess, "оформи возврат по заказу 1041")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(r1, "NEEDS_USER_INPUT:") || !strings.Contains(r1, "1041") {
+		t.Fatalf("turn 1 should ask to confirm order 1041, got %q", r1)
+	}
+
+	r2, err := oc.ask(context.Background(), sess, "да")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(r2, "оформлен") {
+		t.Fatalf("turn 2 should complete the refund, got %q", r2)
+	}
+	if o, _ := store.Get("1041"); o.Status != "refunded" {
+		t.Errorf("store should show order 1041 refunded, got status %q", o.Status)
+	}
+}
+
+func TestEndToEndRefundDeclined(t *testing.T) {
+	store := e2eStore(t)
+	model := llm.NewStub(
+		llm.StubTurn{Call: &genai.FunctionCall{Name: "initiate_refund", Args: map[string]any{"order_id": "1041"}}},
+	)
+	url := startWorkerWithTools(t, model, store)
+
+	oc, err := NewOrdersClient(context.Background(), url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := "conf-no"
+
+	if _, err := oc.ask(context.Background(), sess, "оформи возврат по заказу 1041"); err != nil {
+		t.Fatal(err)
+	}
+	r2, err := oc.ask(context.Background(), sess, "нет, не надо")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.ToLower(r2), "отмен") {
+		t.Fatalf("declining should report the refund was cancelled, got %q", r2)
+	}
+	if o, _ := store.Get("1041"); o.Status == "refunded" {
+		t.Error("refund must NOT have executed after the user declined")
 	}
 }

@@ -25,6 +25,7 @@ type pending struct {
 type OrdersClient struct {
 	client  *a2aclient.Client
 	trace   *Tracer
+	profile WorkerProfile
 	mu      sync.Mutex
 	pending map[string]pending // keyed by orchestrator session id
 }
@@ -41,9 +42,12 @@ func NewOrdersClient(ctx context.Context, workerURL string, trace *Tracer) (*Ord
 	if err != nil {
 		return nil, fmt.Errorf("a2a client: %w", err)
 	}
+	profile := ProfileFromCard(card)
+	trace.Logf("derived delegating tool %q from card", profile.ToolName)
 	return &OrdersClient{
 		client:  cl,
 		trace:   trace,
+		profile: profile,
 		pending: make(map[string]pending),
 	}, nil
 }
@@ -128,6 +132,9 @@ func (c *OrdersClient) clearPending(sessionID string) {
 	c.mu.Unlock()
 }
 
+// Profile returns the worker profile derived from the resolved AgentCard.
+func (c *OrdersClient) Profile() WorkerProfile { return c.profile }
+
 // pendingTaskID returns the A2A task id that is pending for the given session,
 // or the zero value if there is none. Intended for tests.
 func (c *OrdersClient) pendingTaskID(sessionID string) a2a.TaskID {
@@ -141,20 +148,21 @@ type askArgs struct {
 	Message string `json:"message" description:"Что спросить или сообщить агенту по заказам"`
 }
 
-// Tool returns an adk function tool named ask_orders_agent that delegates to
-// the orders worker agent via A2A. The orchestrator session id is obtained
-// from tool.Context.SessionID() (available via the embedded ReadonlyContext).
+// Tool returns an adk function tool, named and described per the derived
+// WorkerProfile, that delegates to the worker agent via A2A. The orchestrator
+// session id is obtained from tool.Context.SessionID() (available via the
+// embedded ReadonlyContext).
 func (c *OrdersClient) Tool() tool.Tool {
 	t, err := functiontool.New(functiontool.Config{
-		Name:        "ask_orders_agent",
-		Description: "Делегировать запрос про заказы агенту по заказам. Если он вернёт NEEDS_USER_INPUT, задайте пользователю этот вопрос, затем снова вызовите инструмент с его ответом.",
+		Name:        c.profile.ToolName,
+		Description: c.profile.ToolDesc,
 	}, func(tc tool.Context, a askArgs) (string, error) {
 		// tool.Context embeds context.Context via agent.ReadonlyContext, so tc
 		// itself satisfies context.Context. SessionID() is also on ReadonlyContext.
 		return c.ask(tc, tc.SessionID(), a.Message)
 	})
 	if err != nil {
-		panic(fmt.Sprintf("failed to create ask_orders_agent tool: %v", err))
+		panic(fmt.Sprintf("failed to create %s tool: %v", c.profile.ToolName, err))
 	}
 	return t
 }
