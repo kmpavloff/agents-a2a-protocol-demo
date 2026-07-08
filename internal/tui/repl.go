@@ -98,7 +98,7 @@ func actionLabels(v any) string {
 // implemented by the A2A orders client. The TUI registers a handler so widgets
 // render directly here instead of passing through the LLM.
 type WidgetSource interface {
-	SetWidgetHandler(func(map[string]any))
+	SetWidgetHandler(func(sessionID string, w map[string]any))
 }
 
 // Run starts a REPL that reads user input, runs it through the orchestrator
@@ -117,7 +117,7 @@ func Run(ctx context.Context, r *runner.Runner, ws WidgetSource) error {
 	// call runs inside r.Run's iteration), never concurrently.
 	widgetShown := false
 	if ws != nil {
-		ws.SetWidgetHandler(func(w map[string]any) {
+		ws.SetWidgetHandler(func(_ string, w map[string]any) {
 			renderWidget(w)
 			widgetShown = true
 		})

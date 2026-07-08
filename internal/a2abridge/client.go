@@ -29,14 +29,14 @@ type OrdersClient struct {
 	mu      sync.Mutex
 	pending map[string]pending // keyed by orchestrator session id
 	// onWidget, if set, receives structured widgets the worker returns in
-	// DataParts so they reach the UI directly instead of being flattened into
-	// the orchestrator LLM's text answer.
-	onWidget func(map[string]any)
+	// DataParts, tagged with the orchestrator session id (= A2A contextID) so a
+	// multi-session server can route each widget to the right request.
+	onWidget func(sessionID string, w map[string]any)
 }
 
 // SetWidgetHandler registers a callback for widgets (DataParts) the worker
 // emits. The handler runs on the goroutine that invokes the delegating tool.
-func (c *OrdersClient) SetWidgetHandler(fn func(map[string]any)) { c.onWidget = fn }
+func (c *OrdersClient) SetWidgetHandler(fn func(sessionID string, w map[string]any)) { c.onWidget = fn }
 
 // NewOrdersClient resolves the worker AgentCard at workerURL and creates an
 // A2A client from it. trace may be nil to disable protocol tracing.
@@ -117,14 +117,14 @@ func (c *OrdersClient) ask(ctx context.Context, sessionID, text string) (string,
 			c.mu.Lock()
 			c.pending[sessionID] = pending{taskID: r.ID, contextID: r.ContextID}
 			c.mu.Unlock()
-			c.forwardWidget(statusParts(r)) // e.g. confirmation widget
+			c.forwardWidget(sessionID, statusParts(r)) // e.g. confirmation widget
 			question := statusMessageText(r)
 			c.trace.Logf("    ⏸ input-required — stored pending task, asking user: %q", question)
 			return "NEEDS_USER_INPUT: " + question, nil
 		}
 		// Completed (or failed/canceled) — clear any pending state.
 		c.clearPending(sessionID)
-		c.forwardWidget(artifactParts(r)) // e.g. order / order-list widget
+		c.forwardWidget(sessionID, artifactParts(r)) // e.g. order / order-list widget
 		result := taskResultText(r)
 		c.trace.Logf("    ✔ terminal state, cleared pending | result=%q", result)
 		return result, nil
@@ -178,14 +178,15 @@ func (c *OrdersClient) Tool() tool.Tool {
 }
 
 // forwardWidget sends the first widget among parts (if any) to the registered
-// handler, so it renders in the UI without passing through the LLM.
-func (c *OrdersClient) forwardWidget(parts []*a2a.Part) {
+// handler, tagged with sessionID, so it renders in the UI without passing
+// through the LLM.
+func (c *OrdersClient) forwardWidget(sessionID string, parts []*a2a.Part) {
 	if c.onWidget == nil {
 		return
 	}
 	if w := firstWidget(parts); w != nil {
 		c.trace.Logf("    ⟐ widget DataPart (%v) → UI, bypassing LLM", w["_kind"])
-		c.onWidget(w)
+		c.onWidget(sessionID, w)
 	}
 }
 

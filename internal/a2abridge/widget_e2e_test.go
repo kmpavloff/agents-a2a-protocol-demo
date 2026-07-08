@@ -19,7 +19,7 @@ func clientCapturingWidgets(t *testing.T, url string) (*OrdersClient, *[]map[str
 		t.Fatal(err)
 	}
 	var got []map[string]any
-	oc.SetWidgetHandler(func(w map[string]any) { got = append(got, w) })
+	oc.SetWidgetHandler(func(_ string, w map[string]any) { got = append(got, w) })
 	return oc, &got
 }
 
