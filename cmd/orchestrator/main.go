@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
+	"net/http"
 	"os"
 
+	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
 
@@ -13,9 +16,13 @@ import (
 	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/config"
 	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/llm"
 	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/tui"
+	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/webui"
 )
 
 func main() {
+	web := flag.Bool("web", false, "serve the A2UI web UI + A2A server instead of the terminal REPL")
+	flag.Parse()
+
 	ctx := context.Background()
 	cfg, err := config.LoadOrchestrator("configs/orchestrator.yaml")
 	if err != nil {
@@ -52,6 +59,21 @@ func main() {
 	if err != nil {
 		log.Fatalf("runner: %v", err)
 	}
+	if *web {
+		exec := a2abridge.NewOrchestratorExecutor(r, oc, trace)
+		handler := a2asrv.NewHandler(exec)
+		mux := http.NewServeMux()
+		// JSON-RPC endpoint — matches the URL advertised in the agent card (publicURL/invoke).
+		mux.Handle("/invoke", a2asrv.NewJSONRPCHandler(handler))
+		// Well-known agent card path — used by a2aclient resolver / A2UI-aware browsers.
+		mux.Handle(a2asrv.WellKnownAgentCardPath, a2asrv.NewStaticAgentCardHandler(a2abridge.OrchestratorCard(cfg.PublicURL)))
+		// Embedded frontend.
+		mux.Handle("/", webui.Handler())
+		log.Printf("orchestrator web UI on %s", cfg.ListenAddr)
+		log.Fatal(http.ListenAndServe(cfg.ListenAddr, mux))
+		return
+	}
+
 	// Widgets the worker returns in DataParts render directly in the terminal,
 	// bypassing the orchestrator LLM (Run registers the handler on oc).
 	if err := tui.Run(ctx, r, oc); err != nil {
