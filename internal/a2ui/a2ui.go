@@ -49,6 +49,28 @@ func surface(surfaceID string, components []map[string]any) []map[string]any {
 	}
 }
 
+// ParseAction extracts an incoming A2UI action event from a DataPart's data map.
+// Shape: {"version":"v0.9","action":{"name":"...","context":{...}}}. Returns
+// ok=false when the map is not an action payload.
+func ParseAction(data map[string]any) (string, map[string]any, bool) {
+	if data == nil {
+		return "", nil, false
+	}
+	action, ok := data["action"].(map[string]any)
+	if !ok {
+		return "", nil, false
+	}
+	name, ok := action["name"].(string)
+	if !ok || name == "" {
+		return "", nil, false
+	}
+	ctx, _ := action["context"].(map[string]any)
+	if ctx == nil {
+		ctx = map[string]any{}
+	}
+	return name, ctx, true
+}
+
 // FromWidget converts a widget map (keyed by "_kind" plus payload) into the
 // ordered A2UI messages to emit. Returns ok=false for an unknown kind.
 func FromWidget(w map[string]any) ([]map[string]any, bool) {
