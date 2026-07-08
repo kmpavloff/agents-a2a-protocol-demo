@@ -89,7 +89,7 @@ func FromWidget(w map[string]any) ([]map[string]any, bool) {
 			{"id": "actions", "component": "Row", "children": []any{"approve", "decline"}},
 		}
 		comps = append(comps, button("approve", "approve_lbl", "Оформить возврат", "primary", "approve_refund", ctx)...)
-		comps = append(comps, button("decline", "decline_lbl", "Отмена", "secondary", "decline_refund", ctx)...)
+		comps = append(comps, button("decline", "decline_lbl", "Отмена", "default", "decline_refund", ctx)...)
 		return surface(sid, comps), true
 
 	case "widget/order":

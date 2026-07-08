@@ -13,8 +13,15 @@ export class OrdersApp extends LitElement {
   #processor = new MessageProcessor(
     [basicCatalog],
     async (action) => {
-      const msgs = await this.#client.sendAction(action.name, action.context ?? {});
-      this.#ingest(msgs);
+      this._busy = true;
+      try {
+        const msgs = await this.#client.sendAction(action.name, action.context ?? {});
+        this.#ingest(msgs);
+      } catch (err) {
+        console.error('A2UI action failed:', err);
+      } finally {
+        this._busy = false;
+      }
     },
   );
 

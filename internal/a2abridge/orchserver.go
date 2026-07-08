@@ -115,13 +115,16 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 			}
 		}
 
+		// Drain this session's widget slot unconditionally so text-only
+		// sessions don't leak a map entry; only emit A2UI parts when active.
+		e.mu.Lock()
+		ws := e.widgets[sessionID]
+		delete(e.widgets, sessionID)
+		e.mu.Unlock()
+
 		// Assemble the artifact: text first (fallback), then A2UI parts.
 		parts := []*a2a.Part{a2a.NewTextPart(strings.TrimSpace(orDefault(finalText, "Готово.")))}
 		if a2uiActive {
-			e.mu.Lock()
-			ws := e.widgets[sessionID]
-			delete(e.widgets, sessionID)
-			e.mu.Unlock()
 			for _, w := range ws {
 				if msgs, ok := a2ui.FromWidget(w); ok {
 					for _, m := range msgs {
