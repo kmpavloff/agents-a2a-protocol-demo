@@ -3,6 +3,7 @@ package a2abridge
 
 import (
 	"context"
+	"encoding/gob"
 	"encoding/json"
 	"fmt"
 	"iter"
@@ -16,11 +17,23 @@ import (
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/tool/toolconfirmation"
 	"google.golang.org/genai"
+
+	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/orders"
 )
 
 // needInputPrefix is the sentinel the worker agent emits when it needs
 // clarification from the caller.
 const needInputPrefix = "NEED_INPUT:"
+
+// The a2asrv in-memory task store gob-encodes tasks to persist them. A widget
+// DataPart's Data is an interface value, so gob needs the concrete container
+// types our widgets carry (nested maps and slices-of-maps) registered up front,
+// or task persistence fails with "type not registered for interface".
+func init() {
+	gob.Register(map[string]any{})
+	gob.Register([]map[string]any{})
+	gob.Register([]any{})
+}
 
 // ANSI colors for the (gray) agent↔LLM loop trace lines on the worker's output.
 const (
@@ -116,14 +129,26 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 			msg = genai.NewContentFromText(userText, genai.RoleUser)
 		}
 
-		// 4. Run the adk runner, watching for a HITL confirmation request.
-		var finalText, confirmQuestion, capturedCallID string
+		// 4. Run the adk runner, watching for a HITL confirmation request and for
+		//    any structured widget a read tool stashed in session state.
+		var finalText, confirmQuestion, capturedCallID, capturedOrderID string
+		var capturedWidget map[string]any
 		e.trace.Logf("%s  · агент → LLM: запрос%s", gray, reset)
 		for event, err := range e.runner.Run(ctx, "a2a-user", sessionID, msg, agent.RunConfig{}) {
 			if err != nil {
 				e.trace.Logf("  ✖ runner error: %v", err)
 				yield(nil, err)
 				return
+			}
+			// A read tool may have stashed a structured widget in state; the
+			// delta rides on the tool's function-response event.
+			if event != nil {
+				if raw, ok := event.Actions.StateDelta[orders.WidgetStateKey]; ok {
+					if w, ok := raw.(map[string]any); ok {
+						capturedWidget = w
+						e.trace.Logf("%s  · инструмент → виджет %v%s", gray, w["kind"], reset)
+					}
+				}
 			}
 			if event == nil || event.Content == nil {
 				continue
@@ -142,6 +167,7 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 						confirmQuestion = "Подтвердите выполнение действия? (да/нет)"
 					} else {
 						confirmQuestion = refundConfirmQuestion(orig)
+						capturedOrderID = refundOrderID(orig)
 					}
 					e.trace.Logf("  ⏸ tool confirmation requested | callID=%s question=%q", capturedCallID, confirmQuestion)
 				case p.FunctionCall != nil:
@@ -162,7 +188,12 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 			e.pendingConfirm[sessionID] = capturedCallID
 			e.mu.Unlock()
 			e.trace.Logf("  → emit: input-required (confirmation) | question=%q", confirmQuestion)
-			ask := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart(confirmQuestion))
+			// Text part is the fallback for UI-less clients; the DataPart carries
+			// the confirmation-widget spec, built by code from the captured call.
+			ask := a2a.NewMessage(a2a.MessageRoleAgent,
+				a2a.NewTextPart(confirmQuestion),
+				refundConfirmWidget(capturedOrderID, confirmQuestion),
+			)
 			yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateInputRequired, ask), nil)
 			return
 		}
@@ -183,8 +214,15 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 		if artifactText == "" {
 			artifactText = "Готово."
 		}
+		// Text part first (human/LLM fallback); append a widget DataPart when a
+		// read tool produced structured data this turn.
+		parts := []*a2a.Part{a2a.NewTextPart(artifactText)}
+		if w := widgetPartFromState(capturedWidget); w != nil {
+			e.trace.Logf("  → including %v DataPart in artifact", capturedWidget["kind"])
+			parts = append(parts, w)
+		}
 		e.trace.Logf("  → emit: artifact + completed | artifact=%q", artifactText)
-		if !yield(a2a.NewArtifactEvent(ec, a2a.NewTextPart(artifactText)), nil) {
+		if !yield(a2a.NewArtifactEvent(ec, parts...), nil) {
 			return
 		}
 		yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateCompleted, nil), nil)
@@ -222,21 +260,73 @@ func parseAffirmative(text string) bool {
 	return true
 }
 
-// refundConfirmQuestion builds the Russian confirmation prompt from the original
-// initiate_refund call captured inside the adk_request_confirmation event.
-func refundConfirmQuestion(orig *genai.FunctionCall) string {
-	id := ""
+// widgetKindConfirmation is the metadata.kind contract that tells a UI consumer
+// this DataPart is a confirmation dialog. The A2A protocol assigns DataPart no
+// meaning of its own — this label is the producer↔consumer agreement.
+const widgetKindConfirmation = "widget/confirmation"
+
+// widgetPart wraps structured data as an A2A DataPart tagged with the given kind
+// in metadata — the field a UI consumer selects a renderer by.
+func widgetPart(kind string, data map[string]any) *a2a.Part {
+	p := a2a.NewDataPart(data)
+	p.Metadata = map[string]any{"kind": kind, "version": 1}
+	return p
+}
+
+// widgetPartFromState turns a tool-stashed widget map (which carries its kind
+// under "kind") into a DataPart, or nil if there is none. The kind moves to the
+// part's metadata; the remaining entries become the widget payload.
+func widgetPartFromState(w map[string]any) *a2a.Part {
+	if w == nil {
+		return nil
+	}
+	kind, _ := w["kind"].(string)
+	if kind == "" {
+		return nil
+	}
+	payload := make(map[string]any, len(w))
+	for k, v := range w {
+		if k != "kind" {
+			payload[k] = v
+		}
+	}
+	return widgetPart(kind, payload)
+}
+
+// refundConfirmWidget builds the confirmation-dialog DataPart. Its params are
+// assembled by CODE from the captured initiate_refund call, never invented by
+// the LLM — the safe posture for a money-moving action. The refund has NOT run
+// yet at HITL time, so the amount is unknown here and intentionally omitted.
+func refundConfirmWidget(orderID, message string) *a2a.Part {
+	return widgetPart(widgetKindConfirmation, map[string]any{
+		"type":     "confirmation",
+		"title":    "Подтверждение возврата",
+		"message":  message,
+		"order_id": orderID,
+		"actions": []map[string]any{
+			{"id": "approve", "label": "Оформить возврат", "style": "danger"},
+			{"id": "decline", "label": "Отмена", "style": "secondary"},
+		},
+	})
+}
+
+// refundOrderID extracts the order id from the captured initiate_refund call,
+// tolerating the synonym keys small models emit.
+func refundOrderID(orig *genai.FunctionCall) string {
 	if orig != nil && orig.Args != nil {
 		for _, k := range []string{"order_id", "order_number", "number", "id"} {
-			if v, ok := orig.Args[k]; ok {
-				if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
-					id = strings.TrimSpace(s)
-					break
-				}
+			if s, ok := orig.Args[k].(string); ok && strings.TrimSpace(s) != "" {
+				return strings.TrimSpace(s)
 			}
 		}
 	}
-	if id != "" {
+	return ""
+}
+
+// refundConfirmQuestion builds the Russian confirmation prompt from the original
+// initiate_refund call captured inside the adk_request_confirmation event.
+func refundConfirmQuestion(orig *genai.FunctionCall) string {
+	if id := refundOrderID(orig); id != "" {
 		return fmt.Sprintf("Подтвердите оформление возврата по заказу %s? (да/нет)", id)
 	}
 	return "Подтвердите оформление возврата? (да/нет)"

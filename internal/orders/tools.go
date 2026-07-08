@@ -179,9 +179,25 @@ func Tools(s *Store) []tool.Tool {
 		mustTool(functiontool.New(functiontool.Config{Name: "find_order", Description: "Найти заказ по номеру или тексту названия товара."},
 			func(_ tool.Context, a queryArgs) (string, error) { return findOrder(s, a.Query) })),
 		mustTool(functiontool.New(functiontool.Config{Name: "get_order_status", Description: "Узнать статус заказа по его номеру."},
-			func(_ tool.Context, a idArgs) (string, error) { return getOrderStatus(s, a.orderID()) })),
+			func(tc tool.Context, a idArgs) (string, error) {
+				text, err := getOrderStatus(s, a.orderID())
+				if err == nil {
+					if o, ok := s.Get(a.orderID()); ok {
+						stashWidget(tc, orderWidget(o))
+					}
+				}
+				return text, err
+			})),
 		mustTool(functiontool.New(functiontool.Config{Name: "list_recent_orders", Description: "Показать последние заказы клиента по его имени (например, alice), новые сверху."},
-			func(_ tool.Context, a customerArgs) (string, error) { return listRecentOrders(s, a.customer()) })),
+			func(tc tool.Context, a customerArgs) (string, error) {
+				text, err := listRecentOrders(s, a.customer())
+				if err == nil {
+					if list := s.ByCustomer(a.customer()); len(list) > 0 {
+						stashWidget(tc, orderListWidget(a.customer(), list))
+					}
+				}
+				return text, err
+			})),
 		mustTool(functiontool.New(functiontool.Config{Name: "get_sales_stats", Description: "Получить статистику продаж за период (ГГГГ-ММ)."},
 			func(_ tool.Context, a periodArgs) (string, error) { return getSalesStats(s, a.Period) })),
 		mustTool(functiontool.New(functiontool.Config{

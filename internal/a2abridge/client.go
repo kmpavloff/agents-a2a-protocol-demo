@@ -28,7 +28,15 @@ type OrdersClient struct {
 	profile WorkerProfile
 	mu      sync.Mutex
 	pending map[string]pending // keyed by orchestrator session id
+	// onWidget, if set, receives structured widgets the worker returns in
+	// DataParts so they reach the UI directly instead of being flattened into
+	// the orchestrator LLM's text answer.
+	onWidget func(map[string]any)
 }
+
+// SetWidgetHandler registers a callback for widgets (DataParts) the worker
+// emits. The handler runs on the goroutine that invokes the delegating tool.
+func (c *OrdersClient) SetWidgetHandler(fn func(map[string]any)) { c.onWidget = fn }
 
 // NewOrdersClient resolves the worker AgentCard at workerURL and creates an
 // A2A client from it. trace may be nil to disable protocol tracing.
@@ -109,12 +117,14 @@ func (c *OrdersClient) ask(ctx context.Context, sessionID, text string) (string,
 			c.mu.Lock()
 			c.pending[sessionID] = pending{taskID: r.ID, contextID: r.ContextID}
 			c.mu.Unlock()
+			c.forwardWidget(statusParts(r)) // e.g. confirmation widget
 			question := statusMessageText(r)
 			c.trace.Logf("    ⏸ input-required — stored pending task, asking user: %q", question)
 			return "NEEDS_USER_INPUT: " + question, nil
 		}
 		// Completed (or failed/canceled) — clear any pending state.
 		c.clearPending(sessionID)
+		c.forwardWidget(artifactParts(r)) // e.g. order / order-list widget
 		result := taskResultText(r)
 		c.trace.Logf("    ✔ terminal state, cleared pending | result=%q", result)
 		return result, nil
@@ -165,6 +175,59 @@ func (c *OrdersClient) Tool() tool.Tool {
 		panic(fmt.Sprintf("failed to create %s tool: %v", c.profile.ToolName, err))
 	}
 	return t
+}
+
+// forwardWidget sends the first widget among parts (if any) to the registered
+// handler, so it renders in the UI without passing through the LLM.
+func (c *OrdersClient) forwardWidget(parts []*a2a.Part) {
+	if c.onWidget == nil {
+		return
+	}
+	if w := firstWidget(parts); w != nil {
+		c.trace.Logf("    ⟐ widget DataPart (%v) → UI, bypassing LLM", w["_kind"])
+		c.onWidget(w)
+	}
+}
+
+// statusParts returns the parts of an input-required task's status message.
+func statusParts(t *a2a.Task) []*a2a.Part {
+	if t.Status.Message == nil {
+		return nil
+	}
+	return t.Status.Message.Parts
+}
+
+// artifactParts returns the parts of a task's last artifact.
+func artifactParts(t *a2a.Task) []*a2a.Part {
+	if len(t.Artifacts) == 0 {
+		return nil
+	}
+	return t.Artifacts[len(t.Artifacts)-1].Parts
+}
+
+// firstWidget returns the payload of the first DataPart whose metadata.kind
+// marks it as a widget ("widget/..."), with the kind injected under "_kind" so
+// a renderer can dispatch on it. Returns nil when there is no widget part.
+func firstWidget(parts []*a2a.Part) map[string]any {
+	for _, p := range parts {
+		if p == nil {
+			continue
+		}
+		kind, _ := p.Metadata["kind"].(string)
+		if !strings.HasPrefix(kind, "widget/") {
+			continue
+		}
+		data, ok := p.Data().(map[string]any)
+		if !ok {
+			continue
+		}
+		out := map[string]any{"_kind": kind}
+		for k, v := range data {
+			out[k] = v
+		}
+		return out
+	}
+	return nil
 }
 
 // statusMessageText extracts the question text from an input-required task's

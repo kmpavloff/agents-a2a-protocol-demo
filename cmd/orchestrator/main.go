@@ -52,7 +52,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("runner: %v", err)
 	}
-	if err := tui.Run(ctx, r); err != nil {
+	// Widgets the worker returns in DataParts render directly in the terminal,
+	// bypassing the orchestrator LLM (Run registers the handler on oc).
+	if err := tui.Run(ctx, r, oc); err != nil {
 		log.Fatalf("tui: %v", err)
 	}
 }
