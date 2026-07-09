@@ -106,8 +106,18 @@ go run ./cmd/orchestrator
 # > (prompt appears, type your message and press Enter)
 ```
 
-Configuration lives in `configs/worker.yaml` and `configs/orchestrator.yaml`.
-Override any value with environment variables:
+**Configuration.** The real `configs/worker.yaml` and `configs/orchestrator.yaml`
+are **gitignored** (they hold your LLM endpoint and API key). Create them once
+from the committed templates and fill in your LLM connection:
+
+```bash
+cp configs/worker.example.yaml       configs/worker.yaml
+cp configs/orchestrator.example.yaml configs/orchestrator.yaml
+# then edit the llm: base_url / model / api_key in each
+```
+
+Every value can also be overridden with environment variables (handy for CI or
+for keeping secrets out of files entirely):
 
 | Variable | Default (yaml) | Purpose |
 |---|---|---|

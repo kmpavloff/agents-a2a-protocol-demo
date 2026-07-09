@@ -2,3 +2,8 @@
 *.exe
 .env
 *.log
+
+# Local service configs hold real LLM endpoints/keys — untracked.
+# Copy the committed *.example.yaml versions to create them.
+configs/worker.yaml
+configs/orchestrator.yaml

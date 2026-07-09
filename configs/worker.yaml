@@ -1,8 +1,0 @@
-# Worker (orders-agent) configuration. Env vars override these (see internal/config).
-listen_addr: ":8081"
-public_url: "http://localhost:8081"
-data_path: "data/orders.json"
-llm:
-  base_url: "http://192.168.1.53:1234/v1"
-  model: "google/gemma-4-12b-qat"
-  api_key: "lm-studio"

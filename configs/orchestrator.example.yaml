@@ -1,0 +1,24 @@
+# Orchestrator configuration — EXAMPLE.
+#
+# Copy this file to `configs/orchestrator.yaml` and fill in your LLM connection:
+#   cp configs/orchestrator.example.yaml configs/orchestrator.yaml
+#
+# The real `configs/orchestrator.yaml` is gitignored because it holds your API key.
+# Env-var overrides (see internal/config): ORCHESTRATOR_LISTEN_ADDR,
+# ORCHESTRATOR_PUBLIC_URL, WORKER_URL, A2A_LOG_PATH, LLM_BASE_URL, LLM_MODEL,
+# LLM_API_KEY.
+#
+# listen_addr/public_url are used only in --web mode (A2A server + embedded frontend).
+listen_addr: ":8080"
+public_url: "http://localhost:8080"
+worker_url: "http://localhost:8081"
+# File for the A2A protocol trace (how the orchestrator calls the worker).
+# Kept off stdout so it does not clutter the REPL. Override with A2A_LOG_PATH.
+a2a_log_path: "a2a-orchestrator.log"
+llm:
+  # OpenAI-compatible endpoint. Examples:
+  #   LM Studio (local): http://localhost:1234/v1
+  #   remote provider:   https://api.your-provider.com/v1
+  base_url: "http://localhost:1234/v1"
+  model: "your-model-name"
+  api_key: "your-api-key" # any non-empty string works for LM Studio
