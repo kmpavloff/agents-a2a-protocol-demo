@@ -90,7 +90,34 @@ render an order card, an order list, or an interactive refund confirmation.
 
 ## Running locally
 
-Open two terminals in the project root.
+**First-time setup — create your configs.** The real `configs/worker.yaml` and
+`configs/orchestrator.yaml` are **gitignored** (they hold your LLM endpoint and
+API key), so create them from the committed templates before the first run:
+
+```bash
+cp configs/worker.example.yaml       configs/worker.yaml
+cp configs/orchestrator.example.yaml configs/orchestrator.yaml
+```
+
+Then open **each** file and fill in the `llm:` block — that is where the LLM
+connection goes:
+
+```yaml
+llm:
+  base_url: "http://localhost:1234/v1"   # OpenAI-compatible endpoint
+  model:    "your-model-name"            # exact model id the endpoint serves
+  api_key:  "your-api-key"               # any non-empty string for LM Studio
+```
+
+- **LM Studio (local):** `base_url: http://localhost:1234/v1`, `api_key: lm-studio`.
+- **Remote provider:** `base_url: https://api.your-provider.com/v1` plus your real key.
+
+Both files use the same `llm:` block. Any value can also be set via env vars
+(see the table below) — handy for keeping the key out of the file entirely.
+
+---
+
+Then open two terminals in the project root.
 
 **Terminal 1 — start the worker (A2A server)**
 
@@ -106,18 +133,8 @@ go run ./cmd/orchestrator
 # > (prompt appears, type your message and press Enter)
 ```
 
-**Configuration.** The real `configs/worker.yaml` and `configs/orchestrator.yaml`
-are **gitignored** (they hold your LLM endpoint and API key). Create them once
-from the committed templates and fill in your LLM connection:
-
-```bash
-cp configs/worker.example.yaml       configs/worker.yaml
-cp configs/orchestrator.example.yaml configs/orchestrator.yaml
-# then edit the llm: base_url / model / api_key in each
-```
-
-Every value can also be overridden with environment variables (handy for CI or
-for keeping secrets out of files entirely):
+**Environment overrides.** Any config value can also be overridden with an
+environment variable (handy for CI or for keeping the key out of files entirely):
 
 | Variable | Default (yaml) | Purpose |
 |---|---|---|
