@@ -192,9 +192,18 @@ func toOpenAITools(req *adkmodel.LLMRequest) []openai.ChatCompletionToolParam {
 			if fd == nil {
 				continue
 			}
+			// adk (functiontool) publishes the generated JSON Schema on
+			// FunctionDeclaration.ParametersJsonSchema (a raw JSON Schema),
+			// leaving the legacy Parameters *genai.Schema field nil. Read the
+			// former first — otherwise the tool is sent WITHOUT a parameter
+			// schema and strict models (e.g. GLM) call it with empty arguments.
 			var params shared.FunctionParameters
-			if fd.Parameters != nil {
-				b, err := json.Marshal(fd.Parameters)
+			schema := fd.ParametersJsonSchema
+			if schema == nil && fd.Parameters != nil {
+				schema = fd.Parameters
+			}
+			if schema != nil {
+				b, err := json.Marshal(schema)
 				if err == nil {
 					_ = json.Unmarshal(b, &params)
 					// shared.FunctionParameters is a named type; convert to map[string]any

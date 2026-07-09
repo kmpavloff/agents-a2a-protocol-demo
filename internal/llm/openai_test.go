@@ -98,6 +98,64 @@ func TestModelCallsEndpointAndReturnsText(t *testing.T) {
 // req.Config.Tools are forwarded as an OpenAI "tools" array in the request
 // body. The httptest server captures the body and returns a normal text
 // completion so the call completes without error.
+func TestToolParametersFromJSONSchema(t *testing.T) {
+	// Regression: adk's functiontool publishes the generated schema on
+	// FunctionDeclaration.ParametersJsonSchema and leaves the legacy Parameters
+	// field nil. If the client reads only Parameters, the tool goes out WITHOUT
+	// a parameter schema and strict models (e.g. GLM) call it with empty args.
+	var capturedBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"x","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer srv.Close()
+
+	m := New(configLLM(srv.URL + "/v1"))
+	req := &adkmodel.LLMRequest{
+		Contents: []*genai.Content{{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "hi"}}}},
+		Config: &genai.GenerateContentConfig{
+			Tools: []*genai.Tool{{
+				FunctionDeclarations: []*genai.FunctionDeclaration{{
+					Name:        "ask_orders_agent",
+					Description: "Delegate to the orders agent",
+					// Mirror adk: schema on ParametersJsonSchema, Parameters nil.
+					ParametersJsonSchema: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"message": map[string]any{"type": "string", "description": "what to ask"},
+						},
+						"required": []any{"message"},
+					},
+				}},
+			}},
+		},
+	}
+	for _, err := range m.GenerateContent(context.Background(), req, false) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(capturedBody, &body); err != nil {
+		t.Fatal(err)
+	}
+	tools, _ := body["tools"].([]any)
+	if len(tools) == 0 {
+		t.Fatal("expected tools in request body")
+	}
+	fn := tools[0].(map[string]any)["function"].(map[string]any)
+	params, ok := fn["parameters"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool sent WITHOUT a parameters schema (regression): %v", fn)
+	}
+	props, ok := params["properties"].(map[string]any)
+	if !ok || props["message"] == nil {
+		t.Fatalf("expected 'message' property in parameters, got %v", params)
+	}
+}
+
 func TestToolsAreSentToEndpoint(t *testing.T) {
 	var capturedBody []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
