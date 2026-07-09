@@ -97,8 +97,7 @@ func FromWidget(w map[string]any) ([]map[string]any, bool) {
 		o, _ := w["order"].(map[string]any)
 		children := []any{"title"}
 		comps := []map[string]any{
-			{"id": "root", "component": "Card", "child": "col"},
-			{"id": "col", "component": "Column", "children": children},
+			{"id": "root", "component": "Column", "children": children},
 			text("title", title, "h3"),
 		}
 		add := func(id, label string, key string) {
@@ -115,7 +114,7 @@ func FromWidget(w map[string]any) ([]map[string]any, bool) {
 		}
 		add("customer", "Клиент:", "customer")
 		add("created", "Дата:", "created")
-		comps[1]["children"] = children // refresh Column children after appends
+		comps[0]["children"] = children // refresh root Column children after appends
 		return surface(sid, comps), true
 
 	case "widget/order_list":

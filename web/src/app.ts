@@ -1,86 +1,203 @@
-import {LitElement, html, css} from 'lit';
+import {LitElement, html, css, nothing} from 'lit';
 import {customElement, state} from 'lit/decorators.js';
+import {provide} from '@lit/context';
 import {MessageProcessor} from '@a2ui/web_core/v0_9';
-import {basicCatalog} from '@a2ui/lit/v0_9';
+import {basicCatalog, Context} from '@a2ui/lit/v0_9';
 import '@a2ui/lit/v0_9'; // registers <a2ui-surface>
+import {renderMarkdown} from '@a2ui/markdown-it';
 import {A2UIClient} from './client.js';
+
+/** One entry in the conversation feed, kept in chronological order. */
+type Item =
+  | {kind: 'user'; text: string}
+  | {kind: 'assistant'; text: string}
+  | {kind: 'widget'; surface: any};
 
 @customElement('orders-app')
 export class OrdersApp extends LitElement {
+  // Give the A2UI Text components a markdown renderer; without one they show
+  // raw markdown (e.g. a heading as literal "### ...").
+  @provide({context: Context.markdown})
+  markdownRenderer = (value: string, options?: any): Promise<string> =>
+    Promise.resolve(renderMarkdown(value, options));
+
   #client = new A2UIClient();
 
-  // The processor renders surfaces and routes button actions back to the agent.
-  #processor = new MessageProcessor(
-    [basicCatalog],
-    async (action) => {
-      this._busy = true;
-      try {
-        const {a2ui, text} = await this.#client.sendAction(action.name, action.context ?? {});
-        if (text) this._log = [...this._log, `ассистент: ${text}`];
-        this.#ingest(a2ui);
-      } catch (err) {
-        console.error('A2UI action failed:', err);
-        this._log = [...this._log, `ошибка: ${err}`];
-      } finally {
-        this._busy = false;
-      }
-    },
-  );
+  // The processor renders A2UI surfaces and routes button clicks back to the
+  // agent. Each created surface becomes a widget item in the feed, in order.
+  #processor = new MessageProcessor([basicCatalog], async (action: any) => {
+    await this.#turn(`«${action.name}»`, () =>
+      this.#client.sendAction(action.name, action.context ?? {}),
+    );
+  });
 
-  @state() private _surfaces: any[] = [];
-  @state() private _log: string[] = [];
+  @state() private _items: Item[] = [];
   @state() private _busy = false;
 
   connectedCallback() {
     super.connectedCallback();
-    this.#processor.onSurfaceCreated((s) => {
-      this._surfaces = [...this._surfaces, s];
+    this.#processor.onSurfaceCreated((s: any) => {
+      this._items = [...this._items, {kind: 'widget', surface: s}];
     });
   }
 
-  #ingest(msgs: any[]) {
-    const a2ui = msgs.filter(m => m && m.version === 'v0.9');
-    if (a2ui.length) this.#processor.processMessages(a2ui);
-  }
-
-  async #send(text: string) {
-    if (!text.trim()) return;
-    this._log = [...this._log, `вы: ${text}`];
+  // Runs one exchange: optionally record a user entry, call the agent, then
+  // append either widget(s) or the plain-text reply (a widget already conveys
+  // the message, so the text is suppressed when widgets are present).
+  async #turn(userText: string | null, run: () => Promise<{a2ui: any[]; text: string}>) {
+    if (userText) this._items = [...this._items, {kind: 'user', text: userText}];
     this._busy = true;
     try {
-      const {a2ui, text: reply} = await this.#client.sendText(text);
-      if (reply) this._log = [...this._log, `ассистент: ${reply}`];
-      this.#ingest(a2ui);
+      const {a2ui, text} = await run();
+      if (a2ui.length) this.#processor.processMessages(a2ui);
+      else if (text) this._items = [...this._items, {kind: 'assistant', text}];
     } catch (err) {
-      console.error('send failed:', err);
-      this._log = [...this._log, `ошибка: ${err}`];
+      console.error('turn failed:', err);
+      this._items = [...this._items, {kind: 'assistant', text: `Ошибка: ${err}`}];
     } finally {
       this._busy = false;
     }
   }
 
+  #send(text: string) {
+    if (!text.trim()) return;
+    void this.#turn(text, () => this.#client.sendText(text));
+  }
+
   static styles = css`
-    :host { display: block; max-width: 640px; margin: 0 auto; padding: 24px; font-family: system-ui; }
-    .log { margin: 12px 0; color: #555; }
-    .surfaces { display: flex; flex-direction: column; gap: 16px; }
-    form { display: flex; gap: 8px; margin-top: 16px; }
-    input { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid #ccc; }
-    button { padding: 12px 20px; border-radius: 8px; border: none; background: #3367d6; color: #fff; }
+    :host {
+      display: block;
+      max-width: 640px;
+      margin: 0 auto;
+      padding: 24px;
+      color-scheme: light;
+      font-family: system-ui, sans-serif;
+      color: #222;
+    }
+    h2 {
+      font-weight: 700;
+    }
+    .feed {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin: 18px 0;
+    }
+    .bubble {
+      padding: 8px 12px;
+      border-radius: 14px;
+      max-width: 85%;
+      white-space: pre-wrap;
+      line-height: 1.45;
+    }
+    .bubble.user {
+      align-self: flex-end;
+      background: #1177ee;
+      color: #fff;
+      border-bottom-right-radius: 4px;
+    }
+    .bubble.assistant {
+      align-self: flex-start;
+      background: #f0f1f3;
+      color: #222;
+      border-bottom-left-radius: 4px;
+    }
+    .widget {
+      align-self: stretch;
+      position: relative;
+      margin: 6px 0;
+      border: 1px solid #d0d7de;
+      border-radius: 14px;
+      background: #fff;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.07);
+      padding: 16px 14px 14px;
+    }
+    .widget-tag {
+      position: absolute;
+      top: -9px;
+      left: 14px;
+      font-size: 11px;
+      font-weight: 600;
+      color: #57606a;
+      background: #fff;
+      padding: 1px 8px;
+      border: 1px solid #d0d7de;
+      border-radius: 999px;
+    }
+    .thinking {
+      align-self: flex-start;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #57606a;
+      font-size: 14px;
+    }
+    .spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid #d7dbe0;
+      border-top-color: #1177ee;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+    form {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    input {
+      flex: 1;
+      padding: 12px;
+      border-radius: 10px;
+      border: 1px solid #ccc;
+      font-size: 15px;
+    }
+    button {
+      padding: 12px 20px;
+      border-radius: 10px;
+      border: none;
+      background: #1177ee;
+      color: #fff;
+      cursor: pointer;
+    }
+    button[disabled] {
+      opacity: 0.5;
+      cursor: default;
+    }
   `;
+
+  #renderItem(it: Item) {
+    if (it.kind === 'widget') {
+      return html`<div class="widget">
+        <span class="widget-tag">🧩 виджет</span>
+        <a2ui-surface .surface=${it.surface}></a2ui-surface>
+      </div>`;
+    }
+    return html`<div class="bubble ${it.kind}">${it.text}</div>`;
+  }
 
   render() {
     return html`
       <h2>Ассистент заказов · A2UI</h2>
-      <div class="log">${this._log.map(l => html`<div>${l}</div>`)}</div>
-      <div class="surfaces">
-        ${this._surfaces.map(s => html`<a2ui-surface .surface=${s}></a2ui-surface>`)}
+      <div class="feed">
+        ${this._items.map((it) => this.#renderItem(it))}
+        ${this._busy
+          ? html`<div class="thinking"><span class="spinner"></span> агент печатает…</div>`
+          : nothing}
       </div>
-      <form @submit=${(e: Event) => {
-        e.preventDefault();
-        const input = (e.target as HTMLFormElement).querySelector('input')!;
-        this.#send(input.value);
-        input.value = '';
-      }}>
+      <form
+        @submit=${(e: Event) => {
+          e.preventDefault();
+          const input = (e.target as HTMLFormElement).querySelector('input')!;
+          this.#send(input.value);
+          input.value = '';
+        }}
+      >
         <input placeholder="Напишите запрос…" ?disabled=${this._busy} />
         <button type="submit" ?disabled=${this._busy}>Отправить</button>
       </form>

@@ -9,7 +9,9 @@
   "dependencies": {
     "@a2a-js/sdk": "1.0.0-beta.0",
     "@a2ui/lit": "^0.10.0",
+    "@a2ui/markdown-it": "^0.1.0",
     "@a2ui/web_core": "^0.10.0",
+    "@lit/context": "^1.0.0",
     "lit": "^3.0.0"
   },
   "devDependencies": {
