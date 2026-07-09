@@ -109,6 +109,8 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 		llmStart := time.Now()
 		msg := genai.NewContentFromText(userText, genai.RoleUser)
 		var finalText string
+		toolCalls := 0
+		limitHit := false
 		for event, err := range e.runner.Run(ctx, "a2ui-user", sessionID, msg, agent.RunConfig{}) {
 			if err != nil {
 				e.trace.Logf("  ✖ runner error: %v", err)
@@ -121,17 +123,31 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 			for _, p := range event.Content.Parts {
 				switch {
 				case p.FunctionCall != nil:
-					e.trace.Logf("%s  · LLM → инструмент: %s(%s)%s",
-						gray, p.FunctionCall.Name, compactArgs(p.FunctionCall.Args), reset)
+					toolCalls++
+					e.trace.Logf("%s  · LLM → инструмент: %s(%s) [#%d]%s",
+						gray, p.FunctionCall.Name, compactArgs(p.FunctionCall.Args), toolCalls, reset)
+					if toolCalls > maxToolCallsPerTurn {
+						limitHit = true
+					}
 				case p.FunctionResponse != nil:
 					e.trace.Logf("%s  · инструмент %s → LLM: результат%s", gray, p.FunctionResponse.Name, reset)
 				case p.Text != "":
 					finalText = p.Text
 				}
 			}
+			// Force-stop before the over-limit call executes: breaking the range
+			// makes the runner's next yield return false, so adk halts the loop.
+			if limitHit {
+				e.trace.Logf("✖ tool-call limit (%d) exceeded — force-stopping the agent loop | session=%s",
+					maxToolCallsPerTurn, sessionID)
+				break
+			}
 		}
-		e.trace.Logf("  LLM finished in %s | finalText=%q",
-			time.Since(llmStart).Round(time.Millisecond), strings.TrimSpace(finalText))
+		if limitHit && strings.TrimSpace(finalText) == "" {
+			finalText = "Не удалось обработать запрос за отведённое число шагов — возможно, модель зациклилась. Попробуйте переформулировать запрос."
+		}
+		e.trace.Logf("  LLM finished in %s | toolCalls=%d limitHit=%v finalText=%q",
+			time.Since(llmStart).Round(time.Millisecond), toolCalls, limitHit, strings.TrimSpace(finalText))
 
 		// Drain this session's widget slot unconditionally so text-only
 		// sessions don't leak a map entry; only emit A2UI parts when active.

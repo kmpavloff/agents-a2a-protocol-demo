@@ -26,6 +26,12 @@ import (
 // clarification from the caller.
 const needInputPrefix = "NEED_INPUT:"
 
+// maxToolCallsPerTurn caps how many tool calls one agent turn may make before
+// the executor force-stops the runner loop. adk (v1.4.0) has no iteration cap
+// of its own, so a looping model would otherwise call tools forever. The limit
+// is generous — a legitimate turn uses at most a handful of tools.
+const maxToolCallsPerTurn = 12
+
 // The a2asrv in-memory task store gob-encodes tasks to persist them. A widget
 // DataPart's Data is an interface value, so gob needs the concrete container
 // types our widgets carry (nested maps and slices-of-maps) registered up front,
@@ -134,6 +140,7 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 		//    any structured widget a read tool stashed in session state.
 		var finalText, confirmQuestion, capturedCallID, capturedOrderID string
 		var capturedWidget map[string]any
+		toolCalls, limitHit := 0, false
 		e.trace.Logf("%s  · агент → LLM: запрос%s", gray, reset)
 		llmStart := time.Now()
 		for event, err := range e.runner.Run(ctx, "a2a-user", sessionID, msg, agent.RunConfig{}) {
@@ -156,6 +163,12 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 				continue
 			}
 			for _, p := range event.Content.Parts {
+				if p.FunctionCall != nil {
+					toolCalls++
+					if toolCalls > maxToolCallsPerTurn {
+						limitHit = true
+					}
+				}
 				switch {
 				case p.FunctionCall != nil && p.FunctionCall.Name == toolconfirmation.FunctionCallName:
 					// adk asks for human approval before running a guarded tool.
@@ -182,8 +195,26 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 					finalText = p.Text
 				}
 			}
+			if limitHit {
+				e.trace.Logf("✖ tool-call limit (%d) exceeded — force-stopping the agent loop | session=%s",
+					maxToolCallsPerTurn, sessionID)
+				break
+			}
 		}
-		e.trace.Logf("  LLM+tools finished in %s", time.Since(llmStart).Round(time.Millisecond))
+		e.trace.Logf("  LLM+tools finished in %s (toolCalls=%d limitHit=%v)",
+			time.Since(llmStart).Round(time.Millisecond), toolCalls, limitHit)
+
+		// If the tool-call limit was hit the model was likely looping — emit a
+		// plain completion instead of running the confirmation/clarification paths.
+		if limitHit {
+			e.trace.Logf("  → emit: artifact + completed | tool-call limit fallback")
+			if !yield(a2a.NewArtifactEvent(ec, a2a.NewTextPart(
+				"Не удалось обработать запрос за отведённое число шагов — возможно, модель зациклилась. Попробуйте переформулировать запрос.")), nil) {
+				return
+			}
+			yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateCompleted, nil), nil)
+			return
+		}
 
 		// 5. Confirmation requested → pause the task as input-required.
 		if capturedCallID != "" {
