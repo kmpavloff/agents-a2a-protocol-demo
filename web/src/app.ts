@@ -15,10 +15,12 @@ export class OrdersApp extends LitElement {
     async (action) => {
       this._busy = true;
       try {
-        const msgs = await this.#client.sendAction(action.name, action.context ?? {});
-        this.#ingest(msgs);
+        const {a2ui, text} = await this.#client.sendAction(action.name, action.context ?? {});
+        if (text) this._log = [...this._log, `ассистент: ${text}`];
+        this.#ingest(a2ui);
       } catch (err) {
         console.error('A2UI action failed:', err);
+        this._log = [...this._log, `ошибка: ${err}`];
       } finally {
         this._busy = false;
       }
@@ -46,8 +48,12 @@ export class OrdersApp extends LitElement {
     this._log = [...this._log, `вы: ${text}`];
     this._busy = true;
     try {
-      const msgs = await this.#client.sendText(text);
-      this.#ingest(msgs);
+      const {a2ui, text: reply} = await this.#client.sendText(text);
+      if (reply) this._log = [...this._log, `ассистент: ${reply}`];
+      this.#ingest(a2ui);
+    } catch (err) {
+      console.error('send failed:', err);
+      this._log = [...this._log, `ошибка: ${err}`];
     } finally {
       this._busy = false;
     }

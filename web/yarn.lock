@@ -5,10 +5,11 @@ __metadata:
   version: 8
   cacheKey: 10c0
 
-"@a2a-js/sdk@npm:^0.3.0":
-  version: 0.3.13
-  resolution: "@a2a-js/sdk@npm:0.3.13"
+"@a2a-js/sdk@npm:1.0.0-beta.0":
+  version: 1.0.0-beta.0
+  resolution: "@a2a-js/sdk@npm:1.0.0-beta.0"
   dependencies:
+    jose: "npm:^6.2.3"
     uuid: "npm:^11.1.0"
   peerDependencies:
     "@bufbuild/protobuf": ^2.10.2
@@ -21,7 +22,7 @@ __metadata:
       optional: true
     express:
       optional: true
-  checksum: 10c0/066c621329c397baeedf7460c8ac74973f520f88574b65119ca0414c8f4279fa03d0875795da4e46f1ae9870142e6d1a0a0a04daabf4c8e25f52bf98e525ab9d
+  checksum: 10c0/7c4f1c686d9df60f0a14fc844bc6fceb0b3aa53aa8e93a454a075c72622518457ad84f393ca06b5fcf3bce1ccff234a111e75cbf4dbb4360ebf0971c9546319c
   languageName: node
   linkType: hard
 
@@ -482,7 +483,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "a2ui-orders-web@workspace:."
   dependencies:
-    "@a2a-js/sdk": "npm:^0.3.0"
+    "@a2a-js/sdk": "npm:1.0.0-beta.0"
     "@a2ui/lit": "npm:^0.10.0"
     "@a2ui/web_core": "npm:^0.10.0"
     lit: "npm:^3.0.0"
@@ -657,6 +658,13 @@ __metadata:
   version: 4.0.0
   resolution: "isexe@npm:4.0.0"
   checksum: 10c0/5884815115bceac452877659a9c7726382531592f43dc29e5d48b7c4100661aed54018cb90bd36cb2eaeba521092570769167acbb95c18d39afdccbcca06c5ce
+  languageName: node
+  linkType: hard
+
+"jose@npm:^6.2.3":
+  version: 6.2.3
+  resolution: "jose@npm:6.2.3"
+  checksum: 10c0/aa91bccba22cc84d86308f833749bcb0b00441e35c24e0ac79abeac5f76dc62d47bdef9c1da6a0c609f5da6478595f52b252085888b89dbdb163861e40ea4188
   languageName: node
   linkType: hard
 
