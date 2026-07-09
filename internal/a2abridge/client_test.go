@@ -85,6 +85,36 @@ func TestClientRejectsEmptyMessageWithoutA2ACall(t *testing.T) {
 	}
 }
 
+func TestEmptyMessageReplyForceStopsLoop(t *testing.T) {
+	c := &OrdersClient{emptyCalls: make(map[string]int)}
+
+	// First empty call: a hint, no force-stop.
+	r1, stop1 := c.emptyMessageReply("s")
+	if stop1 {
+		t.Fatal("first empty call must not force-stop the loop")
+	}
+	if !strings.Contains(r1, "Пустой запрос") {
+		t.Fatalf("first empty call should return the hint, got %q", r1)
+	}
+
+	// Second consecutive empty call reaches the limit → force-stop.
+	if _, stop2 := c.emptyMessageReply("s"); !stop2 {
+		t.Fatal("second consecutive empty call must force-stop the loop")
+	}
+
+	// A real (non-empty) delegation resets the counter, so the next empty call
+	// is treated as the first again.
+	c.clearEmpty("s")
+	if _, stopAfterReset := c.emptyMessageReply("s"); stopAfterReset {
+		t.Fatal("counter must reset after clearEmpty; first empty call must not stop")
+	}
+
+	// Sessions are independent.
+	if _, stopOther := c.emptyMessageReply("other"); stopOther {
+		t.Fatal("a different session's first empty call must not stop")
+	}
+}
+
 func TestClientRelaysInputRequiredThenCompletes(t *testing.T) {
 	// First worker invocation asks for an order id; second resumes the same task.
 	model := llm.NewStub(

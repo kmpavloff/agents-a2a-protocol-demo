@@ -26,8 +26,9 @@ type OrdersClient struct {
 	client  *a2aclient.Client
 	trace   *Tracer
 	profile WorkerProfile
-	mu      sync.Mutex
-	pending map[string]pending // keyed by orchestrator session id
+	mu         sync.Mutex
+	pending    map[string]pending // keyed by orchestrator session id
+	emptyCalls map[string]int     // consecutive empty-message tool calls per session
 	// onWidget, if set, receives structured widgets the worker returns in
 	// DataParts, tagged with the orchestrator session id (= A2A contextID) so a
 	// multi-session server can route each widget to the right request.
@@ -53,10 +54,11 @@ func NewOrdersClient(ctx context.Context, workerURL string, trace *Tracer) (*Ord
 	profile := ProfileFromCard(card)
 	trace.Logf("derived delegating tool %q from card", profile.ToolName)
 	return &OrdersClient{
-		client:  cl,
-		trace:   trace,
-		profile: profile,
-		pending: make(map[string]pending),
+		client:     cl,
+		trace:      trace,
+		profile:    profile,
+		pending:    make(map[string]pending),
+		emptyCalls: make(map[string]int),
 	}, nil
 }
 
@@ -158,6 +160,37 @@ type askArgs struct {
 	Message string `json:"message" description:"Что спросить или сообщить агенту по заказам"`
 }
 
+// emptyCallLimit is the number of consecutive empty-message tool calls after
+// which we force-stop the agent loop. adk (v1.4.0) has NO built-in iteration
+// cap — its agent loop runs until an event is "final" — so a model that keeps
+// calling the delegating tool with an empty message (observed with some GLM
+// builds) would loop forever. See Tool().
+const emptyCallLimit = 2
+
+// emptyMessageReply records one consecutive empty-message call for sessionID and
+// returns the tool result plus whether the agent loop must be force-stopped
+// (true once the limit is reached).
+func (c *OrdersClient) emptyMessageReply(sessionID string) (reply string, stop bool) {
+	c.mu.Lock()
+	c.emptyCalls[sessionID]++
+	n := c.emptyCalls[sessionID]
+	c.mu.Unlock()
+	if n >= emptyCallLimit {
+		c.trace.Logf("✖ %d empty tool calls in a row — force-stopping the agent loop | session=%s", n, sessionID)
+		return "Запрос не выполнен: поле message пустое. Ответьте пользователю обычным текстом (например, уточните, что он хочет узнать о заказах) — НЕ вызывайте инструмент снова.", true
+	}
+	c.trace.Logf("✖ empty message (#%d of %d) | session=%s", n, emptyCallLimit, sessionID)
+	return "Пустой запрос: укажите конкретный вопрос или действие по заказам в поле message. Если запрос пользователя неясен, задайте ему уточняющий вопрос обычным текстом, не вызывая инструмент с пустым message.", false
+}
+
+// clearEmpty resets the consecutive empty-call counter for a session (called
+// whenever a real, non-empty message is delegated).
+func (c *OrdersClient) clearEmpty(sessionID string) {
+	c.mu.Lock()
+	delete(c.emptyCalls, sessionID)
+	c.mu.Unlock()
+}
+
 // Tool returns an adk function tool, named and described per the derived
 // WorkerProfile, that delegates to the worker agent via A2A. The orchestrator
 // session id is obtained from tool.Context.SessionID() (available via the
@@ -169,7 +202,20 @@ func (c *OrdersClient) Tool() tool.Tool {
 	}, func(tc tool.Context, a askArgs) (string, error) {
 		// tool.Context embeds context.Context via agent.ReadonlyContext, so tc
 		// itself satisfies context.Context. SessionID() is also on ReadonlyContext.
-		return c.ask(tc, tc.SessionID(), a.Message)
+		sessionID := tc.SessionID()
+		if strings.TrimSpace(a.Message) == "" {
+			reply, stop := c.emptyMessageReply(sessionID)
+			if stop {
+				// Mark this the final response so adk halts its (otherwise
+				// unbounded) agent loop instead of inviting yet another call.
+				if act := tc.Actions(); act != nil {
+					act.SkipSummarization = true
+				}
+			}
+			return reply, nil
+		}
+		c.clearEmpty(sessionID)
+		return c.ask(tc, sessionID, a.Message)
 	})
 	if err != nil {
 		panic(fmt.Sprintf("failed to create %s tool: %v", c.profile.ToolName, err))
