@@ -1,6 +1,7 @@
 import {LitElement, html, css, nothing} from 'lit';
 import {customElement, state} from 'lit/decorators.js';
 import {unsafeHTML} from 'lit/directives/unsafe-html.js';
+import {until} from 'lit/directives/until.js';
 import {provide} from '@lit/context';
 import {MessageProcessor} from '@a2ui/web_core/v0_9';
 import {basicCatalog, Context} from '@a2ui/lit/v0_9';
@@ -134,6 +135,19 @@ export class OrdersApp extends LitElement {
       color: #222;
       border-bottom-left-radius: 4px;
     }
+    /* Markdown-rendered assistant bubbles produce block elements. */
+    .bubble.md {
+      white-space: normal;
+    }
+    .bubble.md :is(p, ul, ol) {
+      margin: 0.35em 0;
+    }
+    .bubble.md :is(p, ul, ol):first-child {
+      margin-top: 0;
+    }
+    .bubble.md :is(p, ul, ol):last-child {
+      margin-bottom: 0;
+    }
     .widget {
       align-self: stretch;
       position: relative;
@@ -260,7 +274,18 @@ export class OrdersApp extends LitElement {
         <a2ui-surface .surface=${it.surface}></a2ui-surface>
       </div>`;
     }
-    return html`<div class="bubble ${it.kind}">${it.text}</div>`;
+    if (it.kind === 'assistant') {
+      // Render the agent's markdown (e.g. **bold**) instead of showing the raw
+      // syntax. Same (async) renderer the A2UI widgets use; markdown-it escapes
+      // raw HTML. Show the plain text as the fallback until it resolves.
+      return html`<div class="bubble assistant md">
+        ${until(
+          renderMarkdown(it.text).then((h) => unsafeHTML(h)),
+          it.text,
+        )}
+      </div>`;
+    }
+    return html`<div class="bubble user">${it.text}</div>`;
   }
 
   render() {
