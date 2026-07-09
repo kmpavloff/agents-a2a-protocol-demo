@@ -20,6 +20,7 @@ import (
 
 type orchExecutor struct {
 	runner *runner.Runner
+	oc     *OrdersClient
 	trace  *Tracer
 
 	mu      sync.Mutex
@@ -30,7 +31,7 @@ type orchExecutor struct {
 // speaks the A2UI extension: it maps worker widgets to A2UI JSON and translates
 // incoming A2UI button actions into task resumes. trace may be nil.
 func NewOrchestratorExecutor(r *runner.Runner, oc *OrdersClient, trace *Tracer) a2asrv.AgentExecutor {
-	e := &orchExecutor{runner: r, trace: trace, widgets: make(map[string][]map[string]any)}
+	e := &orchExecutor{runner: r, oc: oc, trace: trace, widgets: make(map[string][]map[string]any)}
 	// One global handler routes each widget to its session's slot.
 	oc.SetWidgetHandler(func(sessionID string, w map[string]any) {
 		e.mu.Lock()
@@ -83,10 +84,12 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 
 		// Parse input: an A2UI action DataPart, or plain text.
 		userText := ""
+		actionName := ""
 		if ec.Message != nil {
 			for _, p := range ec.Message.Parts {
 				if data, ok := p.Data().(map[string]any); ok {
 					if name, actx, ok := a2ui.ParseAction(data); ok {
+						actionName = name
 						userText = actionToText(name, actx)
 						e.trace.Logf("  A2UI action %q ctx=%s → user text %q", name, compactArgs(actx), userText)
 						break
@@ -102,6 +105,27 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 		e.mu.Lock()
 		delete(e.widgets, sessionID)
 		e.mu.Unlock()
+
+		// A yes/no button on a pending confirmation resumes the worker task
+		// DIRECTLY with the canonical answer, bypassing the orchestrator LLM.
+		// The LLM (GLM especially) tends to paraphrase "да" into a full sentence,
+		// which the worker's fail-closed confirmation parser then rejects —
+		// silently declining a refund the user actually approved.
+		if (actionName == "approve_refund" || actionName == "decline_refund") && e.oc.pendingTaskID(sessionID) != "" {
+			e.trace.Logf("  confirmation button %q → resuming worker directly with %q (LLM bypassed)", actionName, userText)
+			result, err := e.oc.ask(ctx, sessionID, userText)
+			if err != nil {
+				e.trace.Logf("  ✖ direct resume error: %v", err)
+				yield(nil, err)
+				return
+			}
+			e.trace.Logf("  → emit: artifact + completed | direct confirmation resume | result=%q", result)
+			if !yield(a2a.NewArtifactEvent(ec, a2a.NewTextPart(strings.TrimSpace(orDefault(result, "Готово.")))), nil) {
+				return
+			}
+			yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateCompleted, nil), nil)
+			return
+		}
 
 		// Run the orchestrator LLM. The ask_orders_agent tool delegates to the
 		// worker and forwards any widget through the session handler above.
