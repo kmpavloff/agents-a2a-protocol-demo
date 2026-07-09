@@ -22,6 +22,8 @@ type WorkerConfig struct {
 }
 
 type OrchestratorConfig struct {
+	ListenAddr string    `yaml:"listen_addr"` // used only in --web mode
+	PublicURL  string    `yaml:"public_url"`  // used only in --web mode
 	WorkerURL  string    `yaml:"worker_url"`
 	A2ALogPath string    `yaml:"a2a_log_path"` // file for A2A protocol trace; empty disables
 	LLM        LLMConfig `yaml:"llm"`
@@ -69,10 +71,18 @@ func LoadOrchestrator(path string) (OrchestratorConfig, error) {
 	if err := readYAML(path, &c); err != nil {
 		return c, err
 	}
+	c.ListenAddr = env("ORCHESTRATOR_LISTEN_ADDR", c.ListenAddr)
+	c.PublicURL = env("ORCHESTRATOR_PUBLIC_URL", c.PublicURL)
 	c.WorkerURL = env("WORKER_URL", c.WorkerURL)
 	c.A2ALogPath = env("A2A_LOG_PATH", c.A2ALogPath)
 	if c.A2ALogPath == "" {
 		c.A2ALogPath = "a2a-orchestrator.log"
+	}
+	if c.ListenAddr == "" {
+		c.ListenAddr = ":8080"
+	}
+	if c.PublicURL == "" {
+		c.PublicURL = "http://localhost:8080"
 	}
 	c.LLM.applyEnv()
 	if c.WorkerURL == "" {

@@ -1,0 +1,18 @@
+<!doctype html>
+<!-- a2ui-light forces the A2UI basic-catalog theme to light regardless of the
+     OS color-scheme preference (its default is `color-scheme: light dark`). -->
+<html lang="ru" class="a2ui-light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>A2UI · Ассистент заказов</title>
+    <style>
+      html { color-scheme: light; background: #fff; }
+      body { margin: 0; }
+    </style>
+  </head>
+  <body>
+    <orders-app></orders-app>
+    <script type="module" src="/src/app.ts"></script>
+  </body>
+</html>

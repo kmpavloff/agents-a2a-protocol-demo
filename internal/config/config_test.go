@@ -52,6 +52,20 @@ func TestLoadOrchestratorAppliesEnvOverride(t *testing.T) {
 	}
 }
 
+func TestLoadOrchestratorDefaultsListenAddrAndPublicURL(t *testing.T) {
+	p := writeTemp(t, "worker_url: \"http://localhost:8081\"\nllm:\n  base_url: \"http://localhost:1234/v1\"\n  model: \"local-model\"\n  api_key: \"lm-studio\"\n")
+	cfg, err := LoadOrchestrator(p)
+	if err != nil {
+		t.Fatalf("LoadOrchestrator: %v", err)
+	}
+	if cfg.ListenAddr != ":8080" {
+		t.Errorf("default listen_addr: got %q, want %q", cfg.ListenAddr, ":8080")
+	}
+	if cfg.PublicURL != "http://localhost:8080" {
+		t.Errorf("default public_url: got %q, want %q", cfg.PublicURL, "http://localhost:8080")
+	}
+}
+
 func TestLoadOrchestratorValidatesRequired(t *testing.T) {
 	p := writeTemp(t, "worker_url: \"\"\n")
 	if _, err := LoadOrchestrator(p); err == nil {

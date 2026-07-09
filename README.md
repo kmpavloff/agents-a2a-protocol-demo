@@ -1,8 +1,10 @@
 # A2A Orders Assistant — Go Demo
 
 A minimal, self-contained demo of the **Agent-to-Agent (A2A) protocol** using two
-Go agents. The orchestrator talks to the user through a terminal REPL; the worker
-handles order-management tasks via mock tools. The demo highlights three things:
+Go agents, with an optional browser front-end that renders the conversation as
+rich UI via the **A2UI** extension. The orchestrator talks to the user either
+through a terminal REPL or a browser tab; the worker handles order-management
+tasks via mock tools. The demo highlights five things:
 
 1. **Agent delegation over A2A** — the orchestrator treats the remote worker as an
    `ask_orders_agent` tool backed by a live JSON-RPC / SSE channel.
@@ -12,6 +14,14 @@ handles order-management tasks via mock tools. The demo highlights three things:
    it suspends the A2A task with the canonical `input-required` status; the orchestrator
    relays the question to the user, collects the answer, and resumes the **same** task
    so the worker can complete the refund.
+4. **Human-in-the-Loop refund confirmation** — `initiate_refund` never fires blindly:
+   it pauses the A2A task in `input-required` asking the user to confirm, the
+   orchestrator relays that yes/no question, and the refund executes only once the
+   user replies with an explicit "да" (in the terminal) or a button click (in the browser).
+5. **A2UI in the browser** — with `--web`, the orchestrator itself becomes an A2A
+   server and an **A2UI gateway**: it maps the worker's domain data into A2UI
+   widgets (order card, order list, confirmation) that the browser renders with
+   the official `@a2ui/lit` renderer. See [Web UI (A2UI)](#web-ui-a2ui) below.
 
 Both agents use a local LLM served by [LM Studio](https://lmstudio.ai/) (OpenAI-compatible
 API).
@@ -23,7 +33,8 @@ API).
 ```mermaid
 flowchart LR
     user(["Пользователь"]) -->|"TUI / REPL"| orch
-    orch["orchestrator<br/>adk-go LLM + A2A client"]
+    browser(["Браузер<br/>Vite+Lit + @a2ui/lit + @a2a-js/sdk"]) -->|"A2A + A2UI ext<br/>:8080/invoke"| orch
+    orch["orchestrator :8080<br/>adk-go LLM<br/>A2A client (→worker) + A2A server (--web)"]
     worker["worker · orders-agent :8081<br/>adk-go LLM + A2A server"]
     orch -->|"A2A: message/send"| worker
     worker -->|"input-required / completed"| orch
@@ -38,12 +49,26 @@ flowchart LR
 The orchestrator is an `adk-go` `LlmAgent` with one custom tool `ask_orders_agent`.
 That tool holds an `a2aclient.Client` pointing at the worker and stores any pending
 `taskId`/`contextId` so it can resume the same task after the user provides
-clarification.
+clarification. The tool's name and description are not hardcoded — they are
+**derived from the worker's AgentCard** at startup, fetched via A2A capability
+discovery (`GET /.well-known/agent-card.json`), so the orchestrator adapts to
+whatever the worker advertises.
 
 The worker runs an `a2aproject/a2a-go` HTTP server. Its `AgentExecutor` wraps an
 `adk-go` `LlmAgent` that has the five order tools registered. The AgentCard is
 served at `/.well-known/agent-card.json` and advertises the `/invoke` JSON-RPC
-endpoint.
+endpoint. The worker is unaware of A2UI or the browser — it only ever talks A2A
+to the orchestrator, exactly as in the terminal-only setup.
+
+With `--web`, the orchestrator additionally runs an `a2asrv` A2A **server** on
+`:8080` (its own `/invoke` and AgentCard), so it is simultaneously an A2A
+**client** to the worker and an A2A **server** to the browser. Its AgentCard
+advertises the [A2UI](https://a2ui.org/) extension
+(`https://a2ui.org/a2a-extension/a2ui/v0.9`) via `A2A-Extensions`. When the
+browser negotiates that extension, the orchestrator acts as an **A2UI gateway**:
+it translates the worker's plain order data/widgets into A2UI JSON (`DataPart`s
+with MIME `application/a2ui+json`) instead of plain text, so the browser can
+render an order card, an order list, or an interactive refund confirmation.
 
 ---
 
@@ -56,6 +81,7 @@ endpoint.
 | **Tool-capable model** | Load a model that supports function/tool calling (e.g. `qwen2.5-7b-instruct`, `mistral-nemo-instruct-2407`) |
 | **LM Studio server** | Start the local server on port **1234** (default) |
 | **Docker + Compose** | Only required for the Docker workflow |
+| **Node.js + yarn** | Only required to (re)build the [Web UI](#web-ui-a2ui) frontend — the built assets are committed, so running the demo does not require Node |
 
 > The test suite (`go test ./...`) runs without LM Studio — it uses a deterministic
 > stub LLM and exercises the full A2A round-trip in-process.
@@ -129,6 +155,67 @@ docker compose down
 
 ---
 
+## Web UI (A2UI)
+
+Instead of the terminal REPL, the orchestrator can serve a browser UI that
+renders the same conversation as interactive widgets (order card, order list,
+refund confirmation) using the official [A2UI](https://a2ui.org/) renderer.
+A2UI is carried as a standard **A2A extension**: the browser negotiates it via
+`A2A-Extensions`, and UI payloads travel as ordinary A2A `DataPart`s (MIME
+`application/a2ui+json`) alongside the normal task/message flow — no separate
+protocol or connection.
+
+**1. Build the frontend** (Node.js only needed for this step; the built assets
+are committed to the repo, so a fresh checkout can skip this if `internal/webui/dist`
+is already present):
+
+```bash
+cd web
+yarn install
+yarn build
+# emits internal/webui/dist, embedded into the orchestrator binary via go:embed
+```
+
+**2. Start LM Studio** as in [Running locally](#running-locally) above.
+
+**3. Start the worker** (unchanged):
+
+```bash
+go run ./cmd/worker
+```
+
+**4. Start the orchestrator in web mode** (requires the worker already reachable
+at `WORKER_URL`, default `http://localhost:8081`):
+
+```bash
+go run ./cmd/orchestrator --web
+# orchestrator web UI on :8080
+```
+
+**5. Open [http://localhost:8080](http://localhost:8080)** in a browser. Try:
+
+- «статус заказа 1041» → renders an **order card**.
+- «последние заказы alice» → renders an **order list**.
+- «верни деньги за 1041» → renders a **confirmation card** with
+  **Оформить возврат** / **Отмена** buttons; clicking **Оформить возврат**
+  resumes the A2A task and approves the refund without typing anything.
+
+The Go orchestrator serves both the static frontend and the `/invoke` A2A
+endpoint from the same `:8080` listener, so the browser talks to it
+same-origin — no CORS configuration is needed.
+
+Without `--web`, `go run ./cmd/orchestrator` still runs the original terminal
+REPL described above; both modes share the same agent, tools, and worker
+connection, and the flag is the only difference.
+
+> **Security note.** UI and data received from a remote agent are untrusted
+> input. The official `@a2ui/lit` renderer only ever instantiates a fixed
+> catalog of known components from that data — it does not execute arbitrary
+> code — but a production deployment would still want a strict CSP and
+> additional payload sanitization before treating an agent as fully trusted.
+
+---
+
 ## Walkthrough: refund with clarification
 
 This scenario exercises all three A2A features at once.
@@ -191,6 +278,10 @@ Tests cover:
 - Config loading and env overrides (`internal/config`)
 - A2A server integration: full `SendMessage` → `input-required` → resume → `completed`
   round-trip in-process (`internal/a2abridge`)
+- Widget-to-A2UI JSON translation (`internal/a2ui`)
+
+The browser frontend (`web/`) has no automated tests; it is verified manually
+via the [Web UI](#web-ui-a2ui) walkthrough above.
 
 ---
 
@@ -198,14 +289,18 @@ Tests cover:
 
 ```
 cmd/
-  orchestrator/   # TUI entry point
+  orchestrator/   # entry point: TUI (default) or --web (A2A server + browser UI)
   worker/         # A2A server entry point
 internal/
-  a2abridge/      # adk-go ↔ a2a-go wiring, AgentExecutor
+  a2abridge/      # adk-go ↔ a2a-go wiring, AgentExecutor(s), orchestrator A2A server
+  a2ui/           # domain widgets → A2UI JSON (the A2UI gateway logic)
   orders/         # mock domain, tools, seed loader
   agent/          # LlmAgent builder (adk-go + OpenAI-compat model)
   tui/            # minimal line-oriented REPL
+  webui/          # go:embed of the built frontend (internal/webui/dist)
   config/         # YAML loader + env overrides
+web/              # browser frontend: Vite + Lit + @a2ui/lit + @a2a-js/sdk
+  src/
 configs/
   orchestrator.yaml
   worker.yaml

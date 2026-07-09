@@ -186,3 +186,12 @@ func TestToolsCount(t *testing.T) {
 		t.Errorf("want 5 tools, got %d", got)
 	}
 }
+
+func TestRefundNeedsConfirmation(t *testing.T) {
+	if !refundNeedsConfirmation(idArgs{OrderID: "1041"}) {
+		t.Error("refund with a concrete order id must require confirmation")
+	}
+	if refundNeedsConfirmation(idArgs{}) {
+		t.Error("empty/probing refund call must NOT require confirmation")
+	}
+}

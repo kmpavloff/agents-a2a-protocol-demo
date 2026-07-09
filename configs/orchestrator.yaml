@@ -1,4 +1,7 @@
 # Orchestrator configuration. Env vars override these (see internal/config).
+# listen_addr/public_url are used only in --web mode (A2A server + embedded frontend).
+listen_addr: ":8080"
+public_url: "http://localhost:8080"
 worker_url: "http://localhost:8081"
 # File for the A2A protocol trace (how the orchestrator calls the worker).
 # Kept off stdout so it does not clutter the REPL. Override with A2A_LOG_PATH.

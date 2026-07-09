@@ -25,9 +25,18 @@ type pending struct {
 type OrdersClient struct {
 	client  *a2aclient.Client
 	trace   *Tracer
+	profile WorkerProfile
 	mu      sync.Mutex
 	pending map[string]pending // keyed by orchestrator session id
+	// onWidget, if set, receives structured widgets the worker returns in
+	// DataParts, tagged with the orchestrator session id (= A2A contextID) so a
+	// multi-session server can route each widget to the right request.
+	onWidget func(sessionID string, w map[string]any)
 }
+
+// SetWidgetHandler registers a callback for widgets (DataParts) the worker
+// emits. The handler runs on the goroutine that invokes the delegating tool.
+func (c *OrdersClient) SetWidgetHandler(fn func(sessionID string, w map[string]any)) { c.onWidget = fn }
 
 // NewOrdersClient resolves the worker AgentCard at workerURL and creates an
 // A2A client from it. trace may be nil to disable protocol tracing.
@@ -41,9 +50,12 @@ func NewOrdersClient(ctx context.Context, workerURL string, trace *Tracer) (*Ord
 	if err != nil {
 		return nil, fmt.Errorf("a2a client: %w", err)
 	}
+	profile := ProfileFromCard(card)
+	trace.Logf("derived delegating tool %q from card", profile.ToolName)
 	return &OrdersClient{
 		client:  cl,
 		trace:   trace,
+		profile: profile,
 		pending: make(map[string]pending),
 	}, nil
 }
@@ -105,12 +117,14 @@ func (c *OrdersClient) ask(ctx context.Context, sessionID, text string) (string,
 			c.mu.Lock()
 			c.pending[sessionID] = pending{taskID: r.ID, contextID: r.ContextID}
 			c.mu.Unlock()
+			c.forwardWidget(sessionID, statusParts(r)) // e.g. confirmation widget
 			question := statusMessageText(r)
 			c.trace.Logf("    ⏸ input-required — stored pending task, asking user: %q", question)
 			return "NEEDS_USER_INPUT: " + question, nil
 		}
 		// Completed (or failed/canceled) — clear any pending state.
 		c.clearPending(sessionID)
+		c.forwardWidget(sessionID, artifactParts(r)) // e.g. order / order-list widget
 		result := taskResultText(r)
 		c.trace.Logf("    ✔ terminal state, cleared pending | result=%q", result)
 		return result, nil
@@ -128,6 +142,9 @@ func (c *OrdersClient) clearPending(sessionID string) {
 	c.mu.Unlock()
 }
 
+// Profile returns the worker profile derived from the resolved AgentCard.
+func (c *OrdersClient) Profile() WorkerProfile { return c.profile }
+
 // pendingTaskID returns the A2A task id that is pending for the given session,
 // or the zero value if there is none. Intended for tests.
 func (c *OrdersClient) pendingTaskID(sessionID string) a2a.TaskID {
@@ -141,22 +158,77 @@ type askArgs struct {
 	Message string `json:"message" description:"Что спросить или сообщить агенту по заказам"`
 }
 
-// Tool returns an adk function tool named ask_orders_agent that delegates to
-// the orders worker agent via A2A. The orchestrator session id is obtained
-// from tool.Context.SessionID() (available via the embedded ReadonlyContext).
+// Tool returns an adk function tool, named and described per the derived
+// WorkerProfile, that delegates to the worker agent via A2A. The orchestrator
+// session id is obtained from tool.Context.SessionID() (available via the
+// embedded ReadonlyContext).
 func (c *OrdersClient) Tool() tool.Tool {
 	t, err := functiontool.New(functiontool.Config{
-		Name:        "ask_orders_agent",
-		Description: "Делегировать запрос про заказы агенту по заказам. Если он вернёт NEEDS_USER_INPUT, задайте пользователю этот вопрос, затем снова вызовите инструмент с его ответом.",
+		Name:        c.profile.ToolName,
+		Description: c.profile.ToolDesc,
 	}, func(tc tool.Context, a askArgs) (string, error) {
 		// tool.Context embeds context.Context via agent.ReadonlyContext, so tc
 		// itself satisfies context.Context. SessionID() is also on ReadonlyContext.
 		return c.ask(tc, tc.SessionID(), a.Message)
 	})
 	if err != nil {
-		panic(fmt.Sprintf("failed to create ask_orders_agent tool: %v", err))
+		panic(fmt.Sprintf("failed to create %s tool: %v", c.profile.ToolName, err))
 	}
 	return t
+}
+
+// forwardWidget sends the first widget among parts (if any) to the registered
+// handler, tagged with sessionID, so it renders in the UI without passing
+// through the LLM.
+func (c *OrdersClient) forwardWidget(sessionID string, parts []*a2a.Part) {
+	if c.onWidget == nil {
+		return
+	}
+	if w := firstWidget(parts); w != nil {
+		c.trace.Logf("    ⟐ widget DataPart (%v) → UI, bypassing LLM", w["_kind"])
+		c.onWidget(sessionID, w)
+	}
+}
+
+// statusParts returns the parts of an input-required task's status message.
+func statusParts(t *a2a.Task) []*a2a.Part {
+	if t.Status.Message == nil {
+		return nil
+	}
+	return t.Status.Message.Parts
+}
+
+// artifactParts returns the parts of a task's last artifact.
+func artifactParts(t *a2a.Task) []*a2a.Part {
+	if len(t.Artifacts) == 0 {
+		return nil
+	}
+	return t.Artifacts[len(t.Artifacts)-1].Parts
+}
+
+// firstWidget returns the payload of the first DataPart whose metadata.kind
+// marks it as a widget ("widget/..."), with the kind injected under "_kind" so
+// a renderer can dispatch on it. Returns nil when there is no widget part.
+func firstWidget(parts []*a2a.Part) map[string]any {
+	for _, p := range parts {
+		if p == nil {
+			continue
+		}
+		kind, _ := p.Metadata["kind"].(string)
+		if !strings.HasPrefix(kind, "widget/") {
+			continue
+		}
+		data, ok := p.Data().(map[string]any)
+		if !ok {
+			continue
+		}
+		out := map[string]any{"_kind": kind}
+		for k, v := range data {
+			out[k] = v
+		}
+		return out
+	}
+	return nil
 }
 
 // statusMessageText extracts the question text from an input-required task's
