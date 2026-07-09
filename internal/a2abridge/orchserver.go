@@ -5,6 +5,7 @@ import (
 	"iter"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
@@ -54,7 +55,12 @@ func actionToText(name string, ctx map[string]any) string {
 
 func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {
 	return func(yield func(a2a.Event, error) bool) {
+		reqStart := time.Now()
 		sessionID := ec.ContextID
+		nParts := 0
+		if ec.Message != nil {
+			nParts = len(ec.Message.Parts)
+		}
 
 		// Activate the A2UI extension if the client requested it.
 		a2uiActive := false
@@ -63,7 +69,8 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 			exts.Activate(ext)
 			a2uiActive = true
 		}
-		e.trace.Logf("▶ orchestrator A2A request | contextID=%s a2ui=%v", sessionID, a2uiActive)
+		e.trace.Logf("▶ orchestrator A2A request | contextID=%s a2ui=%v inParts=%d stored=%v",
+			sessionID, a2uiActive, nParts, ec.StoredTask != nil)
 
 		if ec.StoredTask == nil {
 			if !yield(a2a.NewSubmittedTask(ec, ec.Message), nil) {
@@ -81,7 +88,7 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 				if data, ok := p.Data().(map[string]any); ok {
 					if name, actx, ok := a2ui.ParseAction(data); ok {
 						userText = actionToText(name, actx)
-						e.trace.Logf("  A2UI action %q → text %q", name, userText)
+						e.trace.Logf("  A2UI action %q ctx=%s → user text %q", name, compactArgs(actx), userText)
 						break
 					}
 				}
@@ -98,10 +105,13 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 
 		// Run the orchestrator LLM. The ask_orders_agent tool delegates to the
 		// worker and forwards any widget through the session handler above.
+		e.trace.Logf("%s  · оркестратор → LLM: %q%s", gray, userText, reset)
+		llmStart := time.Now()
 		msg := genai.NewContentFromText(userText, genai.RoleUser)
 		var finalText string
 		for event, err := range e.runner.Run(ctx, "a2ui-user", sessionID, msg, agent.RunConfig{}) {
 			if err != nil {
+				e.trace.Logf("  ✖ runner error: %v", err)
 				yield(nil, err)
 				return
 			}
@@ -109,11 +119,19 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 				continue
 			}
 			for _, p := range event.Content.Parts {
-				if p.Text != "" {
+				switch {
+				case p.FunctionCall != nil:
+					e.trace.Logf("%s  · LLM → инструмент: %s(%s)%s",
+						gray, p.FunctionCall.Name, compactArgs(p.FunctionCall.Args), reset)
+				case p.FunctionResponse != nil:
+					e.trace.Logf("%s  · инструмент %s → LLM: результат%s", gray, p.FunctionResponse.Name, reset)
+				case p.Text != "":
 					finalText = p.Text
 				}
 			}
 		}
+		e.trace.Logf("  LLM finished in %s | finalText=%q",
+			time.Since(llmStart).Round(time.Millisecond), strings.TrimSpace(finalText))
 
 		// Drain this session's widget slot unconditionally so text-only
 		// sessions don't leak a map entry; only emit A2UI parts when active.
@@ -127,6 +145,7 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 		if a2uiActive {
 			for _, w := range ws {
 				if msgs, ok := a2ui.FromWidget(w); ok {
+					e.trace.Logf("  A2UI: widget %v → %d message(s) (application/a2ui+json)", w["_kind"], len(msgs))
 					for _, m := range msgs {
 						part := a2a.NewDataPart(m)
 						part.MediaType = a2ui.MIMEType
@@ -134,7 +153,11 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 					}
 				}
 			}
+		} else if len(ws) > 0 {
+			e.trace.Logf("  A2UI inactive — %d widget(s) dropped, text-only response", len(ws))
 		}
+		e.trace.Logf("  → emit: artifact + completed | textPart=1 a2uiParts=%d requestTook=%s",
+			len(parts)-1, time.Since(reqStart).Round(time.Millisecond))
 		if !yield(a2a.NewArtifactEvent(ec, parts...), nil) {
 			return
 		}

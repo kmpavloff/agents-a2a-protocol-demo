@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -29,20 +30,29 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
-	// A2A protocol trace goes to a file so it does not clutter the REPL on stdout.
+	// A2A protocol trace goes to a file so it does not clutter the REPL on
+	// stdout. In --web mode there is no REPL, so mirror the trace to stdout too
+	// where it is easy to watch.
 	logFile, err := os.OpenFile(cfg.A2ALogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		log.Fatalf("open a2a log %s: %v", cfg.A2ALogPath, err)
 	}
 	defer logFile.Close()
-	trace := a2abridge.NewTracer(logFile, "[A2A client] ")
-	log.Printf("A2A protocol trace → %s", cfg.A2ALogPath)
+	var traceW io.Writer = logFile
+	traceDst := cfg.A2ALogPath
+	if *web {
+		traceW = io.MultiWriter(os.Stdout, logFile)
+		traceDst = cfg.A2ALogPath + " + stdout"
+	}
+	trace := a2abridge.NewTracer(traceW, "[A2A client] ")
+	log.Printf("A2A protocol trace → %s", traceDst)
 
 	oc, err := a2abridge.NewOrdersClient(ctx, cfg.WorkerURL, trace)
 	if err != nil {
 		log.Fatalf("orders client (is the worker running at %s?): %v", cfg.WorkerURL, err)
 	}
 	model := llm.New(cfg.LLM)
+	log.Printf("orchestrator | LLM=%s model=%q | worker=%s", cfg.LLM.BaseURL, cfg.LLM.Model, cfg.WorkerURL)
 	ordersTool := oc.Tool()
 	log.Printf("orchestrator tools (1):")
 	log.Printf("  - %s: %s", ordersTool.Name(), ordersTool.Description())

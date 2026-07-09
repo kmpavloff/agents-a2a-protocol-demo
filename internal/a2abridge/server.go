@@ -9,6 +9,7 @@ import (
 	"iter"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -134,6 +135,7 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 		var finalText, confirmQuestion, capturedCallID, capturedOrderID string
 		var capturedWidget map[string]any
 		e.trace.Logf("%s  · агент → LLM: запрос%s", gray, reset)
+		llmStart := time.Now()
 		for event, err := range e.runner.Run(ctx, "a2a-user", sessionID, msg, agent.RunConfig{}) {
 			if err != nil {
 				e.trace.Logf("  ✖ runner error: %v", err)
@@ -181,6 +183,7 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 				}
 			}
 		}
+		e.trace.Logf("  LLM+tools finished in %s", time.Since(llmStart).Round(time.Millisecond))
 
 		// 5. Confirmation requested → pause the task as input-required.
 		if capturedCallID != "" {
