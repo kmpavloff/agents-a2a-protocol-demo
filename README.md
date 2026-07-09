@@ -165,6 +165,14 @@ A2UI is carried as a standard **A2A extension**: the browser negotiates it via
 `application/a2ui+json`) alongside the normal task/message flow — no separate
 protocol or connection.
 
+> **A2A protocol version.** The Go server (`a2a-go v2.3.x`) speaks **A2A 1.0**
+> (AgentCard with `supportedInterfaces` / `protocolBinding`, proto-oneof parts).
+> The browser must speak the same revision, so the frontend pins
+> **`@a2a-js/sdk@1.0.0-beta.0`** (npm dist-tag `next`) — the `latest` `0.3.x`
+> line still implements the older A2A `v0.x` card/message schema and cannot
+> negotiate a transport from a 1.0 AgentCard. If you bump this dependency, keep
+> it on an A2A-1.0 release.
+
 **1. Build the frontend** (Node.js only needed for this step; the built assets
 are committed to the repo, so a fresh checkout can skip this if `internal/webui/dist`
 is already present):
@@ -198,7 +206,17 @@ go run ./cmd/orchestrator --web
 - «последние заказы alice» → renders an **order list**.
 - «верни деньги за 1041» → renders a **confirmation card** with
   **Оформить возврат** / **Отмена** buttons; clicking **Оформить возврат**
-  resumes the A2A task and approves the refund without typing anything.
+  resumes the A2A task and approves the refund without typing anything. The
+  confirmation card is consumed on click, and the result appears in the feed.
+
+Chat messages and widgets share one **chronological feed** (each request is
+followed by its widget), a spinner shows while the agent is working, and each
+widget is framed as a card so it is visually distinct from plain text.
+
+At the bottom, expand **«A2A-протокол · показать сырой JSON»** to inspect the
+raw, syntax-highlighted JSON-RPC request/response for every `/invoke`
+exchange — a live view of the actual A2A 1.0 wire format (proto-oneof parts,
+the A2UI `createSurface`/`updateComponents` messages, task status, etc.).
 
 The Go orchestrator serves both the static frontend and the `/invoke` A2A
 endpoint from the same `:8080` listener, so the browser talks to it
