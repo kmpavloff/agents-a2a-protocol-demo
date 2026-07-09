@@ -1,11 +1,32 @@
 import {LitElement, html, css, nothing} from 'lit';
 import {customElement, state} from 'lit/decorators.js';
+import {unsafeHTML} from 'lit/directives/unsafe-html.js';
 import {provide} from '@lit/context';
 import {MessageProcessor} from '@a2ui/web_core/v0_9';
 import {basicCatalog, Context} from '@a2ui/lit/v0_9';
 import '@a2ui/lit/v0_9'; // registers <a2ui-surface>
 import {renderMarkdown} from '@a2ui/markdown-it';
 import {A2UIClient, onA2ATraffic, type TrafficEntry} from './client.js';
+
+// highlightJson pretty-prints a value and wraps JSON tokens in <span> classes
+// for syntax colouring. The raw JSON is HTML-escaped FIRST, so the only markup
+// added is our own spans — safe to feed to unsafeHTML even with agent/user text.
+function highlightJson(value: unknown): string {
+  const escaped = JSON.stringify(value, null, 2)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  return escaped.replace(
+    /("(?:\\.|[^"\\])*"(\s*:)?|\b(?:true|false)\b|\bnull\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g,
+    (m) => {
+      let cls = 'num';
+      if (m[0] === '"') cls = m.endsWith(':') || /"\s*:$/.test(m) ? 'key' : 'str';
+      else if (m === 'true' || m === 'false') cls = 'bool';
+      else if (m === 'null') cls = 'null';
+      return `<span class="tok-${cls}">${m}</span>`;
+    },
+  );
+}
 
 /** One entry in the conversation feed, kept in chronological order. */
 type Item =
@@ -215,6 +236,21 @@ export class OrdersApp extends LitElement {
       overflow-x: auto;
       white-space: pre;
     }
+    .tok-key {
+      color: #7ee787;
+    }
+    .tok-str {
+      color: #a5d6ff;
+    }
+    .tok-num {
+      color: #79c0ff;
+    }
+    .tok-bool {
+      color: #ffa657;
+    }
+    .tok-null {
+      color: #ff7b72;
+    }
   `;
 
   #renderItem(it: Item) {
@@ -253,9 +289,9 @@ export class OrdersApp extends LitElement {
             ${this._traffic.map(
               (e, i) => html`<div class="exchange">
                 <div class="ex-h">#${i + 1} → запрос · message/send</div>
-                <pre>${JSON.stringify(e.request, null, 2)}</pre>
+                <pre>${unsafeHTML(highlightJson(e.request))}</pre>
                 <div class="ex-h">← ответ</div>
-                <pre>${JSON.stringify(e.response, null, 2)}</pre>
+                <pre>${unsafeHTML(highlightJson(e.response))}</pre>
               </div>`,
             )}
           </details>`
