@@ -77,6 +77,26 @@ func renderWidget(w map[string]any) {
 	fmt.Printf("%s└─%s\n", cyan, reset)
 }
 
+// isBriefComment reports whether an assistant reply is a short lead-in worth
+// keeping next to a widget, versus a restatement of the widget's own data that
+// would just duplicate it (too long, a markdown table, or many lines).
+func isBriefComment(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	if len([]rune(s)) > 200 {
+		return false
+	}
+	if strings.Count(s, "|") >= 2 { // markdown table
+		return false
+	}
+	if strings.Count(s, "\n") > 2 {
+		return false
+	}
+	return true
+}
+
 // actionLabels renders a widget's action buttons as "[Label]  [Label]".
 func actionLabels(v any) string {
 	actions, ok := v.([]any)
@@ -161,8 +181,9 @@ func Run(ctx context.Context, r *runner.Runner, ws WidgetSource) error {
 					combined += p.Text
 				}
 			}
-			// Skip the text echo when a widget already conveyed this turn's result.
-			if combined != "" && !widgetShown {
+			// When a widget was shown, keep only a short comment; drop a full
+			// restatement so the text doesn't duplicate the widget.
+			if combined != "" && (!widgetShown || isBriefComment(combined)) {
 				fmt.Printf("%sассистент>%s %s\n", cyan, reset, combined)
 			}
 		}

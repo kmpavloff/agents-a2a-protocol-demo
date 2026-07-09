@@ -29,6 +29,18 @@ function highlightJson(value: unknown): string {
   );
 }
 
+// isBriefComment decides whether an assistant reply is a short lead-in worth
+// keeping next to a widget, versus a restatement of the widget's own data that
+// would just duplicate it (too long, a markdown table, or many lines).
+function isBriefComment(text: string): boolean {
+  const s = (text || '').trim();
+  if (!s) return false;
+  if (s.length > 200) return false; // likely a full restatement
+  if (/\|.+\|/.test(s)) return false; // markdown table row
+  if ((s.match(/\n/g)?.length ?? 0) > 2) return false; // multi-line dump
+  return true;
+}
+
 /** One entry in the conversation feed, kept in chronological order. */
 type Item =
   | {kind: 'user'; text: string}
@@ -82,8 +94,16 @@ export class OrdersApp extends LitElement {
     this._busy = true;
     try {
       const {a2ui, text} = await run();
-      if (a2ui.length) this.#processor.processMessages(a2ui);
-      else if (text) this._items = [...this._items, {kind: 'assistant', text}];
+      if (a2ui.length) {
+        // Keep a short comment above the widget; drop it if it restates the
+        // widget's data (long / table) so the two never duplicate each other.
+        if (isBriefComment(text)) {
+          this._items = [...this._items, {kind: 'assistant', text}];
+        }
+        this.#processor.processMessages(a2ui);
+      } else if (text) {
+        this._items = [...this._items, {kind: 'assistant', text}];
+      }
     } catch (err) {
       console.error('turn failed:', err);
       this._items = [...this._items, {kind: 'assistant', text: `Ошибка: ${err}`}];
