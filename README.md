@@ -81,7 +81,7 @@ render an order card, an order list, or an interactive refund confirmation.
 | **Tool-capable model** | Load a model that supports function/tool calling (e.g. `qwen2.5-7b-instruct`, `mistral-nemo-instruct-2407`) |
 | **LM Studio server** | Start the local server on port **1234** (default) |
 | **Docker + Compose** | Only required for the Docker workflow |
-| **Node.js + yarn** | Only required to (re)build the [Web UI](#web-ui-a2ui) frontend — the built assets are committed, so running the demo does not require Node |
+| **Node.js + yarn** | Required to build the [Web UI](#web-ui-a2ui) frontend (`cd web && yarn build`) — the built assets are **not** committed. The terminal REPL mode needs no Node. |
 
 > The test suite (`go test ./...`) runs without LM Studio — it uses a deterministic
 > stub LLM and exercises the full A2A round-trip in-process.
@@ -200,15 +200,16 @@ protocol or connection.
 > negotiate a transport from a 1.0 AgentCard. If you bump this dependency, keep
 > it on an A2A-1.0 release.
 
-**1. Build the frontend** (Node.js only needed for this step; the built assets
-are committed to the repo, so a fresh checkout can skip this if `internal/webui/dist`
-is already present):
+**1. Build the frontend** (required — the built assets are a generated artifact
+and are **not** committed; a fresh checkout must build them once before running
+web mode):
 
 ```bash
 cd web
 yarn install
 yarn build
-# emits internal/webui/dist, embedded into the orchestrator binary via go:embed
+# emits internal/webui/dist, embedded into the orchestrator binary via go:embed.
+# Until you build, the orchestrator serves a "frontend not built" placeholder.
 ```
 
 **2. Start LM Studio** as in [Running locally](#running-locally) above.

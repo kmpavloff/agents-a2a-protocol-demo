@@ -7,3 +7,8 @@
 # Copy the committed *.example.yaml versions to create them.
 configs/worker.yaml
 configs/orchestrator.yaml
+
+# Built web UI — a generated artifact. Regenerate with: cd web && yarn build.
+# Only the .gitkeep is tracked so //go:embed all:dist still compiles.
+/internal/webui/dist/*
+!/internal/webui/dist/.gitkeep
