@@ -5,7 +5,7 @@ import {MessageProcessor} from '@a2ui/web_core/v0_9';
 import {basicCatalog, Context} from '@a2ui/lit/v0_9';
 import '@a2ui/lit/v0_9'; // registers <a2ui-surface>
 import {renderMarkdown} from '@a2ui/markdown-it';
-import {A2UIClient} from './client.js';
+import {A2UIClient, onA2ATraffic, type TrafficEntry} from './client.js';
 
 /** One entry in the conversation feed, kept in chronological order. */
 type Item =
@@ -26,18 +26,29 @@ export class OrdersApp extends LitElement {
   // The processor renders A2UI surfaces and routes button clicks back to the
   // agent. Each created surface becomes a widget item in the feed, in order.
   #processor = new MessageProcessor([basicCatalog], async (action: any) => {
-    await this.#turn(`«${action.name}»`, () =>
+    // Consume the widget that owned the clicked button (A2UI never sends
+    // deleteSurface here), and echo the button's human label, not its raw
+    // action name.
+    this._items = this._items.filter(
+      (it) => !(it.kind === 'widget' && it.surface?.id === action.surfaceId),
+    );
+    const label = (action.context?.label as string) || action.name;
+    await this.#turn(label, () =>
       this.#client.sendAction(action.name, action.context ?? {}),
     );
   });
 
   @state() private _items: Item[] = [];
   @state() private _busy = false;
+  @state() private _traffic: TrafficEntry[] = [];
 
   connectedCallback() {
     super.connectedCallback();
     this.#processor.onSurfaceCreated((s: any) => {
       this._items = [...this._items, {kind: 'widget', surface: s}];
+    });
+    onA2ATraffic((e) => {
+      this._traffic = [...this._traffic, e];
     });
   }
 
@@ -169,6 +180,41 @@ export class OrdersApp extends LitElement {
       opacity: 0.5;
       cursor: default;
     }
+    .proto {
+      margin-top: 20px;
+      border: 1px solid #e1e4e8;
+      border-radius: 10px;
+      background: #fafbfc;
+      padding: 8px 12px;
+    }
+    .proto summary {
+      cursor: pointer;
+      color: #57606a;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .exchange {
+      margin: 10px 0;
+      border-top: 1px dashed #e1e4e8;
+      padding-top: 8px;
+    }
+    .ex-h {
+      font-size: 11px;
+      font-weight: 600;
+      color: #8b949e;
+      margin: 6px 0 2px;
+    }
+    .proto pre {
+      margin: 0;
+      padding: 8px 10px;
+      background: #0d1117;
+      color: #c9d1d9;
+      border-radius: 6px;
+      font-size: 11.5px;
+      line-height: 1.4;
+      overflow-x: auto;
+      white-space: pre;
+    }
   `;
 
   #renderItem(it: Item) {
@@ -201,6 +247,19 @@ export class OrdersApp extends LitElement {
         <input placeholder="Напишите запрос…" ?disabled=${this._busy} />
         <button type="submit" ?disabled=${this._busy}>Отправить</button>
       </form>
+      ${this._traffic.length
+        ? html`<details class="proto">
+            <summary>A2A-протокол · ${this._traffic.length} обмен(а/ов) — показать сырой JSON</summary>
+            ${this._traffic.map(
+              (e, i) => html`<div class="exchange">
+                <div class="ex-h">#${i + 1} → запрос · message/send</div>
+                <pre>${JSON.stringify(e.request, null, 2)}</pre>
+                <div class="ex-h">← ответ</div>
+                <pre>${JSON.stringify(e.response, null, 2)}</pre>
+              </div>`,
+            )}
+          </details>`
+        : nothing}
     `;
   }
 }

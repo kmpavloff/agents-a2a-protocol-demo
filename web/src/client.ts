@@ -6,6 +6,50 @@ const A2UI_EXT = 'https://a2ui.org/a2a-extension/a2ui/v0.9';
 // ROLE_USER in the A2A v1.0 proto enum (@a2a-js/sdk v1.0.0-beta.0).
 const ROLE_USER = 1;
 
+/** One captured A2A JSON-RPC exchange over the wire (for the protocol log). */
+export interface TrafficEntry {
+  request: any;
+  response: any;
+}
+
+let trafficListener: ((e: TrafficEntry) => void) | null = null;
+
+/** Subscribe to raw A2A traffic on /invoke (the real JSON-RPC wire format). */
+export function onA2ATraffic(cb: (e: TrafficEntry) => void) {
+  trafficListener = cb;
+}
+
+// Wrap the global fetch ONCE so /invoke POSTs (the A2A calls the SDK makes) are
+// captured as parsed JSON and forwarded to the traffic listener. This shows the
+// true wire format, not the SDK's in-memory objects.
+let tapInstalled = false;
+function installFetchTap() {
+  if (tapInstalled || typeof window === 'undefined') return;
+  tapInstalled = true;
+  const orig = window.fetch.bind(window);
+  window.fetch = async (input: any, init?: any) => {
+    const url = typeof input === 'string' ? input : input?.url;
+    const isInvoke = !!url && url.includes('/invoke') && (init?.method || 'GET').toUpperCase() === 'POST';
+    let request: any;
+    if (isInvoke && typeof init?.body === 'string') {
+      try {
+        request = JSON.parse(init.body);
+      } catch {
+        request = init.body;
+      }
+    }
+    const res = await orig(input, init);
+    if (isInvoke && trafficListener) {
+      res
+        .clone()
+        .json()
+        .then((response) => trafficListener?.({request, response}))
+        .catch(() => {});
+    }
+    return res;
+  };
+}
+
 /** What one turn returns: A2UI messages to render, plus the agent's plain text. */
 export interface SendResult {
   a2ui: any[];
@@ -26,6 +70,7 @@ export class A2UIClient {
 
   constructor(baseUrl = '') {
     this.#baseUrl = baseUrl;
+    installFetchTap();
   }
 
   async #getClient(): Promise<Client> {

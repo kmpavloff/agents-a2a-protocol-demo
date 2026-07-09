@@ -4,7 +4,10 @@
 // A2UI-agnostic.
 package a2ui
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 const (
 	ExtensionURI = "https://a2ui.org/a2a-extension/a2ui/v0.9"
@@ -30,12 +33,18 @@ func text(id, s, variant string) map[string]any {
 }
 
 // button builds a Button whose child is a Text label and whose click emits an
-// A2UI action event {name, context}.
+// A2UI action event {name, context}. The label is copied into a per-button
+// context (never the shared ctx) so a client can echo a human-readable action
+// instead of the raw action name.
 func button(id, labelID, label, variant, actionName string, ctx map[string]any) []map[string]any {
+	bctx := map[string]any{"label": label}
+	for k, v := range ctx {
+		bctx[k] = v
+	}
 	return []map[string]any{
 		{
 			"id": id, "component": "Button", "child": labelID, "variant": variant,
-			"action": map[string]any{"event": map[string]any{"name": actionName, "context": ctx}},
+			"action": map[string]any{"event": map[string]any{"name": actionName, "context": bctx}},
 		},
 		text(labelID, label, "body"),
 	}
@@ -80,6 +89,9 @@ func FromWidget(w map[string]any) ([]map[string]any, bool) {
 	case "widget/confirmation":
 		sid := nextSurfaceID("confirmation")
 		msg, _ := w["message"].(string)
+		// Drop the "(да/нет)" hint: redundant in the widget, where the buttons
+		// already offer the choice. The text-fallback part keeps it.
+		msg = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(msg), "(да/нет)"))
 		orderID, _ := w["order_id"].(string)
 		ctx := map[string]any{"order_id": orderID}
 		comps := []map[string]any{
