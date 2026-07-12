@@ -12,3 +12,9 @@ configs/orchestrator.yaml
 # Only the .gitkeep is tracked so //go:embed all:dist still compiles.
 /internal/webui/dist/*
 !/internal/webui/dist/.gitkeep
+
+# Java (Maven) build output.
+java/**/target/
+
+# Local Claude Code settings.
+.claude/settings.local.json

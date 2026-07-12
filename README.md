@@ -26,6 +26,11 @@ tasks via mock tools. The demo highlights five things:
 Both agents use a local LLM served by [LM Studio](https://lmstudio.ai/) (OpenAI-compatible
 API).
 
+> **Java implementation.** The `java/` directory contains a Spring Boot port of
+> both agents (single runnable jars, same A2A 1.0 wire format — the Java and Go
+> worker/orchestrator are interchangeable in any combination), including the
+> `--web` (A2UI) mode. See [java/README.md](java/README.md).
+
 ---
 
 ## Architecture
@@ -347,6 +352,8 @@ internal/
   config/         # YAML loader + env overrides
 web/              # browser frontend: Vite + Lit + @a2ui/lit + @a2a-js/sdk
   src/
+java/             # Java (Spring Boot) port of worker + orchestrator (single jars)
+  common/  worker/  orchestrator/
 configs/
   orchestrator.yaml
   worker.yaml

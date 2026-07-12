@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>io.github.kmpavloff.a2ademo</groupId>
+    <artifactId>a2a-demo-parent</artifactId>
+    <version>0.1.0</version>
+  </parent>
+
+  <artifactId>a2a-demo-orchestrator</artifactId>
+  <name>a2a-demo-orchestrator</name>
+  <description>orchestrator: A2A client + terminal REPL (Java port of cmd/orchestrator)</description>
+
+  <dependencies>
+    <dependency>
+      <groupId>io.github.kmpavloff.a2ademo</groupId>
+      <artifactId>a2a-demo-common</artifactId>
+    </dependency>
+    <!-- web mode: the orchestrator becomes an A2A server + serves the A2UI frontend. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!-- Single runnable jar via the Boot loader (no Spring context needed for a TUI). -->
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <configuration>
+          <mainClass>io.github.kmpavloff.a2ademo.orchestrator.OrchestratorApplication</mainClass>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>
