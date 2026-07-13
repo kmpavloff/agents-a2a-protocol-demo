@@ -163,9 +163,13 @@ func TestOrchestratorActionResumesRefund(t *testing.T) {
 	if receipt == nil {
 		t.Fatalf("completed refund must attach a receipt file, got %v", partsSummary(parts3))
 	}
-	if receipt.MediaType != "text/plain" || !strings.Contains(string(receipt.Raw()), "•••• 1111") {
-		t.Errorf("receipt file must be text/plain with the masked card, got %q: %q",
-			receipt.MediaType, string(receipt.Raw()))
+	body := string(receipt.Raw())
+	if receipt.MediaType != "text/html" || receipt.Filename != "receipt-1041.html" {
+		t.Errorf("receipt must be an HTML file, got %q %q", receipt.MediaType, receipt.Filename)
+	}
+	if !strings.Contains(body, "<!doctype html>") || !strings.Contains(body, "•••• 1111") ||
+		!strings.Contains(body, "Квитанция о возврате") {
+		t.Errorf("receipt HTML must carry the masked card and title, got: %q", body)
 	}
 }
 

@@ -142,12 +142,13 @@ class WorkerA2aE2eTest {
         assertEquals("widget/refund_receipt", parts.get(1).path("metadata").path("kind").asText());
         assertEquals("1111", parts.get(1).path("data").path("card_last4").asText());
         JsonNode file = parts.get(2);
-        assertEquals("receipt-1041.txt", file.path("filename").asText());
-        assertEquals("text/plain", file.path("mediaType").asText());
+        assertEquals("receipt-1041.html", file.path("filename").asText());
+        assertEquals("text/html", file.path("mediaType").asText());
         String receipt = new String(java.util.Base64.getDecoder().decode(file.path("raw").asText()),
                 java.nio.charset.StandardCharsets.UTF_8);
-        assertTrue(receipt.contains("КВИТАНЦИЯ О ВОЗВРАТЕ") && receipt.contains("•••• 1111"),
-                "receipt file content: " + receipt);
+        assertTrue(receipt.contains("<!doctype html>") && receipt.contains("Квитанция о возврате")
+                        && receipt.contains("•••• 1111"),
+                "receipt HTML content: " + receipt);
     }
 
     @Test

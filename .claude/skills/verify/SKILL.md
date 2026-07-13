@@ -57,7 +57,7 @@ point the agents at it with `LLM_BASE_URL=http://127.0.0.1:<port>/v1`.
   (`widget/refund_form`). An invalid number (`1234 5678 9012 3456`, Luhn
   fails) is re-asked; a valid one (`4111 1111 1111 1111`) executes the refund
   → receipt card (`widget/refund_receipt`, card masked `•••• 1111`) + a
-  `receipt-<id>.txt` A2A raw part — the TUI saves it to CWD, web serves a
+  `receipt-<id>.html` A2A raw part — the TUI saves it to CWD, web serves a
   download chip. In web mode the form submit is the
   `submit_refund_details` action with `card_number` resolved from the
   TextField's `{path}` binding; it resumes the worker directly ("LLM

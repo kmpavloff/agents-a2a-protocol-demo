@@ -6,6 +6,7 @@ import (
 	"encoding/gob"
 	"encoding/json"
 	"fmt"
+	"html"
 	"iter"
 	"strings"
 	"sync"
@@ -450,32 +451,69 @@ func refundFormWidget(orderID, message string, isError bool) *a2a.Part {
 
 // enrichReceipt stamps the payment context (masked card, receipt id, creation
 // time, filename) onto the tool-built receipt widget and returns the matching
-// downloadable receipt file as an A2A raw part.
+// downloadable receipt as a self-contained HTML file (an A2A raw part).
 func enrichReceipt(w map[string]any, cardLast4 string) *a2a.Part {
 	now := time.Now()
 	receiptID := fmt.Sprintf("RF-%v-%s", w["order_id"], now.Format("20060102-150405"))
-	filename := fmt.Sprintf("receipt-%v.txt", w["order_id"])
+	filename := fmt.Sprintf("receipt-%v.html", w["order_id"])
 	w["receipt_id"] = receiptID
 	w["card_last4"] = cardLast4
 	w["created"] = now.Format("2006-01-02 15:04:05")
 	w["filename"] = filename
 
-	content := fmt.Sprintf(`КВИТАНЦИЯ О ВОЗВРАТЕ
-=====================
-Квитанция №:      %s
-Дата:             %v
-Заказ:            #%v — %v
-Сумма возврата:   %v %v
-Карта получателя: •••• %s
-Статус:           возврат оформлен
-
-Документ сформирован автоматически агентом orders-agent (A2A demo).
-`, receiptID, w["created"], w["order_id"], w["item"], w["amount"], w["currency"], cardLast4)
-
-	part := a2a.NewRawPart([]byte(content))
+	part := a2a.NewRawPart(receiptHTML(w, receiptID, cardLast4))
 	part.Filename = filename
-	part.MediaType = "text/plain"
+	part.MediaType = "text/html"
 	return part
+}
+
+// receiptHTML renders the refund receipt as a standalone printable HTML page.
+// All values are HTML-escaped: widget data comes from the store, but a receipt
+// must stay safe even if the domain data ever carries markup.
+func receiptHTML(w map[string]any, receiptID, cardLast4 string) []byte {
+	esc := func(v any) string { return html.EscapeString(fmt.Sprintf("%v", v)) }
+	row := func(label, value string) string {
+		return fmt.Sprintf("<tr><td>%s</td><td>%s</td></tr>\n", label, value)
+	}
+	var rows strings.Builder
+	rows.WriteString(row("Квитанция №", esc(receiptID)))
+	rows.WriteString(row("Дата", esc(w["created"])))
+	rows.WriteString(row("Заказ", "#"+esc(w["order_id"])+" — "+esc(w["item"])))
+	rows.WriteString(row("Сумма возврата", esc(w["amount"])+" "+esc(w["currency"])))
+	rows.WriteString(row("Карта получателя", "•••• "+esc(cardLast4)))
+	rows.WriteString(row("Статус", "возврат оформлен"))
+
+	page := fmt.Sprintf(`<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Квитанция о возврате %[1]s</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #f0f1f3; margin: 0; padding: 32px 16px; color: #222; }
+  .receipt { max-width: 480px; margin: 0 auto; background: #fff; border: 1px solid #d0d7de;
+             border-radius: 14px; padding: 28px 32px; box-shadow: 0 1px 4px rgba(0,0,0,.07); }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: #57606a; font-size: 13px; margin: 0 0 20px; }
+  table { width: 100%%; border-collapse: collapse; font-size: 15px; }
+  td { padding: 8px 0; border-bottom: 1px solid #eef1f4; vertical-align: top; }
+  td:first-child { color: #57606a; width: 45%%; padding-right: 12px; }
+  td:last-child { font-weight: 600; }
+  .note { color: #8b949e; font-size: 12px; margin-top: 20px; }
+  @media print { body { background: #fff; padding: 0; } .receipt { border: none; box-shadow: none; } }
+</style>
+</head>
+<body>
+<div class="receipt">
+<h1>Квитанция о возврате</h1>
+<p class="sub">%[1]s</p>
+<table>
+%[2]s</table>
+<p class="note">Документ сформирован автоматически агентом orders-agent (A2A demo).</p>
+</div>
+</body>
+</html>
+`, esc(receiptID), rows.String())
+	return []byte(page)
 }
 
 // refundOrderID extracts the order id from the captured initiate_refund call,

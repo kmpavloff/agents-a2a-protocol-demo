@@ -245,7 +245,7 @@ go run ./cmd/orchestrator --web
   a card number (e.g. the `4111 1111 1111 1111` test number — validated by
   code with a Luhn check, never by the LLM) and click **Вернуть на карту**:
   the refund executes, a **receipt card** renders (card masked to `•••• 1111`)
-  and a **«Скачать receipt-1041.txt»** chip appears — the receipt travels as a
+  and a **«Скачать receipt-1041.html»** chip appears — the receipt travels as a
   standard A2A raw (file) part. Both buttons and the form resume the worker
   task directly, bypassing the LLM, so the card number never passes through
   the model in web mode.
@@ -317,7 +317,7 @@ This scenario exercises all three A2A features at once.
 
 7. Once a valid card is provided, the refund executes and the task transitions
    to `completed` with a **refund receipt**: a receipt card (card masked to
-   `•••• 1111`) plus a downloadable `receipt-1041.txt` attached as a standard
+   `•••• 1111`) plus a downloadable `receipt-1041.html` attached as a standard
    A2A raw (file) part — the TUI saves it next to the REPL, the browser shows
    a download chip:
 
@@ -328,7 +328,7 @@ This scenario exercises all three A2A features at once.
    │ Сумма:       34.5 EUR
    │ Карта:       •••• 1111
    └─
-   💾 Квитанция сохранена: ./receipt-1041.txt
+   💾 Квитанция сохранена: ./receipt-1041.html
    ```
 
 The `input-required` state and task resumption are the A2A protocol in action —

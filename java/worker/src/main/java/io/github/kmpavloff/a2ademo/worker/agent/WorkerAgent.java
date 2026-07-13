@@ -190,33 +190,81 @@ public class WorkerAgent {
 
     /**
      * Stamps the payment context (masked card, receipt id, creation time,
-     * filename) onto the receipt widget and builds the downloadable file.
+     * filename) onto the receipt widget and builds the downloadable receipt as
+     * a self-contained HTML file.
      */
     private static ReceiptFile enrichReceipt(Map<String, Object> w, String cardLast4) {
         LocalDateTime now = LocalDateTime.now();
         String receiptId = "RF-" + w.get("order_id") + "-"
                 + now.format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
         String created = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
-        String filename = "receipt-" + w.get("order_id") + ".txt";
+        String filename = "receipt-" + w.get("order_id") + ".html";
         w.put("receipt_id", receiptId);
         w.put("card_last4", cardLast4);
         w.put("created", created);
         w.put("filename", filename);
+        return new ReceiptFile(filename, "text/html",
+                receiptHtml(w, receiptId, cardLast4).getBytes(StandardCharsets.UTF_8));
+    }
 
-        String content = """
-                КВИТАНЦИЯ О ВОЗВРАТЕ
-                =====================
-                Квитанция №:      %s
-                Дата:             %s
-                Заказ:            #%s — %s
-                Сумма возврата:   %s %s
-                Карта получателя: •••• %s
-                Статус:           возврат оформлен
+    /**
+     * Renders the refund receipt as a standalone printable HTML page. All
+     * values are HTML-escaped: widget data comes from the store, but a receipt
+     * must stay safe even if the domain data ever carries markup.
+     */
+    private static String receiptHtml(Map<String, Object> w, String receiptId, String cardLast4) {
+        StringBuilder rows = new StringBuilder();
+        appendRow(rows, "Квитанция №", esc(receiptId));
+        appendRow(rows, "Дата", esc(w.get("created")));
+        appendRow(rows, "Заказ", "#" + esc(w.get("order_id")) + " — " + esc(w.get("item")));
+        appendRow(rows, "Сумма возврата", esc(w.get("amount")) + " " + esc(w.get("currency")));
+        appendRow(rows, "Карта получателя", "•••• " + esc(cardLast4));
+        appendRow(rows, "Статус", "возврат оформлен");
 
-                Документ сформирован автоматически агентом orders-agent (A2A demo).
-                """.formatted(receiptId, created, w.get("order_id"), w.get("item"),
-                w.get("amount"), w.get("currency"), cardLast4);
-        return new ReceiptFile(filename, "text/plain", content.getBytes(StandardCharsets.UTF_8));
+        return """
+                <!doctype html>
+                <html lang="ru">
+                <head>
+                <meta charset="utf-8">
+                <title>Квитанция о возврате %1$s</title>
+                <style>
+                  body { font-family: system-ui, sans-serif; background: #f0f1f3; margin: 0; padding: 32px 16px; color: #222; }
+                  .receipt { max-width: 480px; margin: 0 auto; background: #fff; border: 1px solid #d0d7de;
+                             border-radius: 14px; padding: 28px 32px; box-shadow: 0 1px 4px rgba(0,0,0,.07); }
+                  h1 { font-size: 20px; margin: 0 0 4px; }
+                  .sub { color: #57606a; font-size: 13px; margin: 0 0 20px; }
+                  table { width: 100%%; border-collapse: collapse; font-size: 15px; }
+                  td { padding: 8px 0; border-bottom: 1px solid #eef1f4; vertical-align: top; }
+                  td:first-child { color: #57606a; width: 45%%; padding-right: 12px; }
+                  td:last-child { font-weight: 600; }
+                  .note { color: #8b949e; font-size: 12px; margin-top: 20px; }
+                  @media print { body { background: #fff; padding: 0; } .receipt { border: none; box-shadow: none; } }
+                </style>
+                </head>
+                <body>
+                <div class="receipt">
+                <h1>Квитанция о возврате</h1>
+                <p class="sub">%1$s</p>
+                <table>
+                %2$s</table>
+                <p class="note">Документ сформирован автоматически агентом orders-agent (A2A demo).</p>
+                </div>
+                </body>
+                </html>
+                """.formatted(esc(receiptId), rows.toString());
+    }
+
+    private static void appendRow(StringBuilder rows, String label, String value) {
+        rows.append("<tr><td>").append(label).append("</td><td>").append(value).append("</td></tr>\n");
+    }
+
+    /** Minimal HTML escaping for receipt values. */
+    private static String esc(Object v) {
+        return String.valueOf(v)
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;");
     }
 
     /** Defensive copy of a widget payload (the builders return fresh maps, but cheap). */
