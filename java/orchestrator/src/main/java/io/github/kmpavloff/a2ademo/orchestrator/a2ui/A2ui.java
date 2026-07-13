@@ -81,6 +81,59 @@ public final class A2ui {
                 comps.addAll(button("decline", "decline_lbl", "Отмена", "default", "decline_refund", ctx));
                 return surface(sid, comps);
             }
+            case "widget/refund_form": {
+                String sid = nextSurfaceId("refund_form");
+                String msg = w.get("message") instanceof String s ? s : "";
+                String orderId = w.get("order_id") instanceof String s ? s : "";
+                boolean isError = "error".equals(w.get("severity"));
+                // The card number is typed into a TextField bound to the surface
+                // data model; the submit button's context resolves {path} bindings
+                // at click time, so the value reaches the agent in the action event.
+                Map<String, Object> ctxSubmit = new LinkedHashMap<>();
+                ctxSubmit.put("order_id", orderId);
+                ctxSubmit.put("card_number", Map.of("path", "/card_number"));
+                Map<String, Object> ctxDecline = Map.of("order_id", orderId);
+
+                List<Map<String, Object>> comps = new ArrayList<>();
+                comps.add(component("root", "Column", "children", List.of("title", "msg", "card", "actions")));
+                comps.add(text("title", title, "h3"));
+                comps.add(text("msg", msg, isError ? "h3" : "body"));
+                Map<String, Object> card = new LinkedHashMap<>();
+                card.put("id", "card");
+                card.put("component", "TextField");
+                card.put("label", "Номер карты");
+                card.put("value", Map.of("path", "/card_number"));
+                card.put("variant", "shortText");
+                comps.add(card);
+                comps.add(component("actions", "Row", "children", List.of("submit", "decline")));
+                comps.addAll(button("submit", "submit_lbl", "Вернуть на карту", "primary", "submit_refund_details", ctxSubmit));
+                comps.addAll(button("decline", "decline_lbl", "Отмена", "default", "decline_refund", ctxDecline));
+                return surface(sid, comps);
+            }
+            case "widget/refund_receipt": {
+                String sid = nextSurfaceId("refund_receipt");
+                List<Object> children = new ArrayList<>(List.of("title"));
+                List<Map<String, Object>> comps = new ArrayList<>();
+                comps.add(component("root", "Column", "children", children));
+                comps.add(text("title", title, "h3"));
+                java.util.function.BiConsumer<String, String> add = (id, line) -> {
+                    children.add(id);
+                    comps.add(text(id, line, "body"));
+                };
+                if (w.get("receipt_id") != null) {
+                    add.accept("rid", "Квитанция №: " + w.get("receipt_id"));
+                }
+                add.accept("order", "Заказ: #" + w.get("order_id") + " — " + w.get("item"));
+                add.accept("amount", "Сумма возврата: " + fmt(w.get("amount")) + " " + w.get("currency"));
+                if (w.get("card_last4") instanceof String last4 && !last4.isEmpty()) {
+                    add.accept("card", "Карта получателя: •••• " + last4);
+                }
+                if (w.get("created") != null) {
+                    add.accept("created", "Дата: " + w.get("created"));
+                }
+                add.accept("note", "Файл квитанции можно скачать ниже.");
+                return surface(sid, comps);
+            }
             case "widget/order": {
                 String sid = nextSurfaceId("order");
                 Map<String, Object> o = w.get("order") instanceof Map<?, ?> m
@@ -100,6 +153,12 @@ public final class A2ui {
                 }
                 addField(comps, children, o, "customer", "Клиент:", "customer");
                 addField(comps, children, o, "created", "Дата:", "created");
+                // Text renders markdown in the browser, so the order-card link
+                // is a plain markdown link (URL built by code, not the LLM).
+                if (o.get("url") instanceof String url && !url.isEmpty()) {
+                    children.add("link");
+                    comps.add(text("link", "[Открыть карточку заказа →](" + url + ")", "body"));
+                }
                 return surface(sid, comps);
             }
             case "widget/order_list": {
@@ -116,7 +175,13 @@ public final class A2ui {
                     }
                     String id = "row" + i++;
                     children.add(id);
-                    String line = "#" + o.get("id") + "  " + o.get("item") + " — " + o.get("status_label")
+                    // The order number becomes a markdown link when the widget
+                    // carries a per-row url, so each row opens its order card.
+                    String num = "#" + o.get("id");
+                    if (o.get("url") instanceof String url && !url.isEmpty()) {
+                        num = "[" + num + "](" + url + ")";
+                    }
+                    String line = num + "  " + o.get("item") + " — " + o.get("status_label")
                             + " (" + fmt(o.get("amount")) + " " + o.get("currency") + ", " + o.get("created") + ")";
                     comps.add(text(id, line, "body"));
                 }

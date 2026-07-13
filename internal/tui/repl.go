@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"google.golang.org/adk/agent"
@@ -54,7 +55,23 @@ func renderWidget(w map[string]any) {
 			}
 			field("Клиент:", "customer")
 			field("Дата:", "created")
+			field("Ссылка:", "url")
 		}
+	case "widget/refund_receipt":
+		field := func(label, key string) {
+			if v, ok := w[key]; ok && v != nil && v != "" {
+				fmt.Printf("%s│%s %-12s %v\n", cyan, reset, label, v)
+			}
+		}
+		field("Квитанция №:", "receipt_id")
+		fmt.Printf("%s│%s %-12s #%v — %v\n", cyan, reset, "Заказ:", w["order_id"], w["item"])
+		if amt, ok := w["amount"]; ok {
+			fmt.Printf("%s│%s %-12s %v %v\n", cyan, reset, "Сумма:", amt, w["currency"])
+		}
+		if last4, _ := w["card_last4"].(string); last4 != "" {
+			fmt.Printf("%s│%s %-12s •••• %s\n", cyan, reset, "Карта:", last4)
+		}
+		field("Дата:", "created")
 	case "widget/order_list":
 		if rows, ok := w["orders"].([]any); ok {
 			for _, r := range rows {
@@ -62,8 +79,12 @@ func renderWidget(w map[string]any) {
 				if !ok {
 					continue
 				}
-				fmt.Printf("%s│%s #%v  %v — %v (%v %v, %v)\n", cyan, reset,
-					o["id"], o["item"], o["status_label"], o["amount"], o["currency"], o["created"])
+				link := ""
+				if u, _ := o["url"].(string); u != "" {
+					link = "  → " + u
+				}
+				fmt.Printf("%s│%s #%v  %v — %v (%v %v, %v)%s\n", cyan, reset,
+					o["id"], o["item"], o["status_label"], o["amount"], o["currency"], o["created"], link)
 			}
 		}
 	default: // widget/confirmation and any future dialog-style widget
@@ -114,11 +135,25 @@ func actionLabels(v any) string {
 	return strings.Join(labels, "  ")
 }
 
-// WidgetSource is anything that can push structured widgets to a handler —
-// implemented by the A2A orders client. The TUI registers a handler so widgets
-// render directly here instead of passing through the LLM.
+// WidgetSource is anything that can push structured widgets and downloadable
+// files to handlers — implemented by the A2A orders client. The TUI registers
+// handlers so both render/save directly instead of passing through the LLM.
 type WidgetSource interface {
 	SetWidgetHandler(func(sessionID string, w map[string]any))
+	SetFileHandler(func(sessionID, filename, mediaType string, data []byte))
+}
+
+// saveFile writes a worker-provided file into the current directory, guarding
+// against path tricks in the filename, and returns the saved path.
+func saveFile(filename string, data []byte) (string, error) {
+	name := filepath.Base(strings.TrimSpace(filename))
+	if name == "" || name == "." || name == string(filepath.Separator) {
+		name = "attachment"
+	}
+	if err := os.WriteFile(name, data, 0o644); err != nil {
+		return "", err
+	}
+	return "./" + name, nil
 }
 
 // Run starts a REPL that reads user input, runs it through the orchestrator
@@ -140,6 +175,16 @@ func Run(ctx context.Context, r *runner.Runner, ws WidgetSource) error {
 		ws.SetWidgetHandler(func(_ string, w map[string]any) {
 			renderWidget(w)
 			widgetShown = true
+		})
+		// Files (e.g. the refund receipt) are saved next to the REPL and the
+		// path is printed, since a terminal cannot "download" anything.
+		ws.SetFileHandler(func(_ , filename, _ string, data []byte) {
+			path, err := saveFile(filename, data)
+			if err != nil {
+				fmt.Printf("%s[файл %s не сохранён: %v]%s\n", gray, filename, err, reset)
+				return
+			}
+			fmt.Printf("%s💾 Квитанция сохранена: %s%s\n", cyan, path, reset)
 		})
 	}
 

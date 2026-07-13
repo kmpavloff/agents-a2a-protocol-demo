@@ -52,11 +52,19 @@ point the agents at it with `LLM_BASE_URL=http://127.0.0.1:<port>/v1`.
 
 - `статус заказа 1041` → order card (`widget/order`)
 - `последние заказы alice` → list card, newest first
-- `верни деньги за <id>` → confirmation card + question (refund must NOT run
-  yet) → `да` resumes the SAME task (check `resuming input-required task` in
-  `a2a-orchestrator.log`) → refund executes; a follow-up status shows
-  «возврат оформлен»
+- `верни деньги за <id>` → confirmation card (refund must NOT run yet) → `да`
+  resumes the SAME task into a SECOND `input-required`: the card form
+  (`widget/refund_form`). An invalid number (`1234 5678 9012 3456`, Luhn
+  fails) is re-asked; a valid one (`4111 1111 1111 1111`) executes the refund
+  → receipt card (`widget/refund_receipt`, card masked `•••• 1111`) + a
+  `receipt-<id>.txt` A2A raw part — the TUI saves it to CWD, web serves a
+  download chip. In web mode the form submit is the
+  `submit_refund_details` action with `card_number` resolved from the
+  TextField's `{path}` binding; it resumes the worker directly ("LLM
+  bypassed" in the trace) and the card is masked in all trace lines.
 - decline probe: answer `нет, передумал` → «Возврат отменён…», order unchanged
+  (works at both the confirmation and the card step — any digit-less reply at
+  the card step cancels)
 - error probes: unknown order 9999, non-refundable 1055
 - worker-side trace: worker prints `[A2A worker]` lines to stdout; the
   orchestrator's trace goes to `a2a-orchestrator.log` (path: `a2a_log_path`)

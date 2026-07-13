@@ -33,8 +33,14 @@ public class OrdersClient {
     private final Map<String, Pending> pending = new ConcurrentHashMap<>();
     private final Map<String, Integer> emptyCalls = new ConcurrentHashMap<>();
     private volatile BiConsumer<String, Map<String, Object>> onWidget;
+    private volatile FileHandler onFile;
 
     private record Pending(String taskId, String contextId) {}
+
+    /** Receives downloadable files (raw parts) the worker attaches to artifacts. */
+    public interface FileHandler {
+        void accept(String sessionId, String filename, String mediaType, byte[] data);
+    }
 
     public OrdersClient(A2aClient client, WorkerProfile profile, Tracer trace) {
         this.client = client;
@@ -49,6 +55,11 @@ public class OrdersClient {
     /** Registers a callback for widgets (DataParts) the worker emits. */
     public void setWidgetHandler(BiConsumer<String, Map<String, Object>> handler) {
         this.onWidget = handler;
+    }
+
+    /** Registers a callback for downloadable files (raw parts) the worker emits. */
+    public void setFileHandler(FileHandler handler) {
+        this.onFile = handler;
     }
 
     /**
@@ -102,6 +113,7 @@ public class OrdersClient {
 
         pending.remove(sessionId);
         forwardWidget(sessionId, artifactParts(task)); // e.g. order / order-list widget
+        forwardFiles(sessionId, artifactParts(task));  // e.g. the refund receipt
         String result = taskResultText(task);
         trace.logf("    ✔ terminal state, cleared pending | result=\"%s\"", result);
         return result;
@@ -176,6 +188,27 @@ public class OrdersClient {
             return out;
         }
         return null;
+    }
+
+    /** Forwards every downloadable raw part (with a filename) to the file handler. */
+    private void forwardFiles(String sessionId, List<Part> parts) {
+        FileHandler handler = onFile;
+        if (handler == null || parts == null) {
+            return;
+        }
+        for (Part p : parts) {
+            if (p == null || p.filename == null || p.filename.isEmpty() || p.raw == null) {
+                continue;
+            }
+            byte[] data;
+            try {
+                data = java.util.Base64.getDecoder().decode(p.raw);
+            } catch (IllegalArgumentException e) {
+                continue;
+            }
+            trace.logf("    ⟐ file part \"%s\" (%s, %d bytes) → UI", p.filename, p.mediaType, data.length);
+            handler.accept(sessionId, p.filename, p.mediaType, data);
+        }
     }
 
     private static List<Part> statusParts(A2aTask t) {

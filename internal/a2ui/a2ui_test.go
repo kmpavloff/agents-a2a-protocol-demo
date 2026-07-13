@@ -49,3 +49,79 @@ func TestFromWidgetUnknownKind(t *testing.T) {
 		t.Error("unknown kind must return ok=false")
 	}
 }
+
+// collectTexts returns all Text component texts from a FromWidget result.
+func collectTexts(t *testing.T, msgs []map[string]any) []string {
+	t.Helper()
+	uc, _ := msgs[1]["updateComponents"].(map[string]any)
+	comps, _ := uc["components"].([]map[string]any)
+	var out []string
+	for _, c := range comps {
+		if c["component"] == "Text" {
+			if s, ok := c["text"].(string); ok {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
+}
+
+func TestFromWidgetOrderIncludesLink(t *testing.T) {
+	msgs, ok := FromWidget(map[string]any{
+		"_kind": "widget/order",
+		"title": "Заказ 1041",
+		"order": map[string]any{
+			"id": "1041", "item": "USB-C хаб", "status_label": "доставлен",
+			"amount": 34.5, "currency": "EUR",
+			"url": "https://shop.test/orders/1041",
+		},
+	})
+	if !ok {
+		t.Fatal("order widget should map")
+	}
+	want := "[Открыть карточку заказа →](https://shop.test/orders/1041)"
+	for _, s := range collectTexts(t, msgs) {
+		if s == want {
+			return
+		}
+	}
+	t.Errorf("no markdown link text %q in components: %v", want, collectTexts(t, msgs))
+}
+
+func TestFromWidgetOrderListRowsLinkTheNumber(t *testing.T) {
+	msgs, ok := FromWidget(map[string]any{
+		"_kind": "widget/order_list",
+		"title": "Последние заказы: alice",
+		"orders": []any{map[string]any{
+			"id": "1041", "item": "USB-C хаб", "status_label": "доставлен",
+			"amount": 34.5, "currency": "EUR", "created": "2026-06-10",
+			"url": "https://shop.test/orders/1041",
+		}},
+	})
+	if !ok {
+		t.Fatal("order_list widget should map")
+	}
+	texts := collectTexts(t, msgs)
+	for _, s := range texts {
+		if s == "[#1041](https://shop.test/orders/1041)  USB-C хаб — доставлен (34.5 EUR, 2026-06-10)" {
+			return
+		}
+	}
+	t.Errorf("no linked row in components: %v", texts)
+}
+
+func TestFromWidgetOrderWithoutURLHasNoLink(t *testing.T) {
+	msgs, ok := FromWidget(map[string]any{
+		"_kind": "widget/order",
+		"title": "Заказ 1041",
+		"order": map[string]any{"id": "1041", "item": "USB-C хаб"},
+	})
+	if !ok {
+		t.Fatal("order widget should map")
+	}
+	for _, s := range collectTexts(t, msgs) {
+		if len(s) > 0 && s[0] == '[' {
+			t.Errorf("unexpected link text %q for widget without url", s)
+		}
+	}
+}

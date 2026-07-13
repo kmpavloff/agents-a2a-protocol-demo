@@ -5,11 +5,14 @@
 #
 # The real `configs/worker.yaml` is gitignored because it holds your API key.
 # Every value can also be overridden with env vars (see internal/config):
-# WORKER_LISTEN_ADDR, WORKER_PUBLIC_URL, WORKER_DATA_PATH, LLM_BASE_URL,
-# LLM_MODEL, LLM_API_KEY.
+# WORKER_LISTEN_ADDR, WORKER_PUBLIC_URL, WORKER_DATA_PATH, ORDER_LINK_BASE,
+# LLM_BASE_URL, LLM_MODEL, LLM_API_KEY.
 listen_addr: ":8081"
 public_url: "http://localhost:8081"
 data_path: "data/orders.json"
+# Base URL of the customer-facing order page: widgets carry <base>/<id> links
+# so the client can open the order card (e.g. from the order list).
+order_link_base: "https://shop.example.com/orders"
 llm:
   # OpenAI-compatible endpoint. Examples:
   #   LM Studio (local): http://localhost:1234/v1

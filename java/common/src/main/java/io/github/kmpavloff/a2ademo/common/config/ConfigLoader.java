@@ -17,7 +17,13 @@ public final class ConfigLoader {
 
     private ConfigLoader() {}
 
-    public record WorkerConfig(String listenAddr, String publicUrl, String dataPath, LlmConfig llm) {
+    /**
+     * orderLinkBase is the base URL of the customer-facing order page; widgets
+     * carry base/&lt;id&gt; links so a client can open the order card. Empty
+     * disables links.
+     */
+    public record WorkerConfig(
+            String listenAddr, String publicUrl, String dataPath, String orderLinkBase, LlmConfig llm) {
         public int port() {
             return parsePort(listenAddr);
         }
@@ -36,9 +42,11 @@ public final class ConfigLoader {
         String listenAddr = env("WORKER_LISTEN_ADDR", str(y, "listen_addr", ":8081"));
         String publicUrl = env("WORKER_PUBLIC_URL", str(y, "public_url", "http://localhost:8081"));
         String dataPath = env("WORKER_DATA_PATH", str(y, "data_path", "data/orders.json"));
+        String orderLinkBase = env("ORDER_LINK_BASE",
+                str(y, "order_link_base", "https://shop.example.com/orders"));
         LlmConfig llm = llm(y);
         require(llm.baseUrl(), "worker config: llm.base_url is required (yaml or LLM_BASE_URL)");
-        return new WorkerConfig(listenAddr, publicUrl, dataPath, llm);
+        return new WorkerConfig(listenAddr, publicUrl, dataPath, orderLinkBase, llm);
     }
 
     public static OrchestratorConfig loadOrchestrator(String path) {

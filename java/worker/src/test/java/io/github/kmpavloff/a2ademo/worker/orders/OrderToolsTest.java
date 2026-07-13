@@ -35,15 +35,18 @@ class OrderToolsTest {
     }
 
     private OrderTools tools() {
-        return new OrderTools(OrderStore.load(seed.toString()));
+        return new OrderTools(OrderStore.load(seed.toString()), "https://shop.test/orders");
     }
 
     @Test
+    @SuppressWarnings("unchecked")
     void getOrderStatusFormatsLikeGo() {
         OrderTools.ToolResult r = tools().getOrderStatus("1041");
         assertEquals("Заказ 1041 (USB-C хаб): статус — доставлен. Сумма: 34.50 EUR.", r.text());
         assertNotNull(r.widget());
         assertEquals("widget/order", r.widget().get("kind"));
+        var order = (java.util.Map<String, Object>) r.widget().get("order");
+        assertEquals("https://shop.test/orders/1041", order.get("url"));
     }
 
     @Test
@@ -59,6 +62,7 @@ class OrderToolsTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
     void listRecentOrdersSortsNewestFirstAndBuildsWidget() {
         OrderTools.ToolResult r = tools().listRecentOrders("alice");
         int i1055 = r.text().indexOf("#1055");
@@ -66,6 +70,15 @@ class OrderToolsTest {
         int i1023 = r.text().indexOf("#1023");
         assertTrue(i1055 >= 0 && i1055 < i1041 && i1041 < i1023, "newest first: " + r.text());
         assertEquals("widget/order_list", r.widget().get("kind"));
+        var rows = (java.util.List<java.util.Map<String, Object>>) r.widget().get("orders");
+        assertEquals("https://shop.test/orders/1055", rows.getFirst().get("url"));
+    }
+
+    @Test
+    void orderUrlBuildsFromBase() {
+        assertEquals("https://shop.test/orders/1041", Widgets.orderUrl("https://shop.test/orders", "1041"));
+        assertEquals("https://shop.test/orders/1041", Widgets.orderUrl("https://shop.test/orders/", "1041"));
+        assertEquals("", Widgets.orderUrl("", "1041"), "empty base must disable links");
     }
 
     @Test
@@ -77,9 +90,14 @@ class OrderToolsTest {
     @Test
     void refundFlowsMirrorGoErrors() {
         OrderTools t = tools();
-        assertEquals("Возврат по заказу 1041 оформлен (34.50 EUR).", t.initiateRefund("1041"));
-        assertEquals("Невозможно оформить возврат: заказ 1055 не подлежит возврату.", t.initiateRefund("1055"));
-        assertEquals("Невозможно оформить возврат: заказ 9999 не найден.", t.initiateRefund("9999"));
+        OrderTools.ToolResult ok = t.initiateRefund("1041");
+        assertEquals("Возврат по заказу 1041 оформлен (34.50 EUR).", ok.text());
+        assertNotNull(ok.widget(), "successful refund must ship the receipt widget");
+        assertEquals("widget/refund_receipt", ok.widget().get("kind"));
+        assertEquals("1041", ok.widget().get("order_id"));
+        assertEquals("Невозможно оформить возврат: заказ 1055 не подлежит возврату.", t.initiateRefund("1055").text());
+        assertNull(t.initiateRefund("1055").widget(), "failed refund must not ship a receipt");
+        assertEquals("Невозможно оформить возврат: заказ 9999 не найден.", t.initiateRefund("9999").text());
     }
 
     @Test

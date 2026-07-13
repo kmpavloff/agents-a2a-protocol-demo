@@ -12,6 +12,7 @@
     "@a2ui/markdown-it": "^0.1.0",
     "@a2ui/web_core": "^0.10.0",
     "@lit/context": "^1.0.0",
+    "buffer": "^6.0.3",
     "lit": "^3.0.0"
   },
   "devDependencies": {

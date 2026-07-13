@@ -182,7 +182,7 @@ func TestInitiateRefundNotFound(t *testing.T) {
 
 func TestToolsCount(t *testing.T) {
 	s := seed(t)
-	if got := len(Tools(s)); got != 5 {
+	if got := len(Tools(s, "")); got != 5 {
 		t.Errorf("want 5 tools, got %d", got)
 	}
 }

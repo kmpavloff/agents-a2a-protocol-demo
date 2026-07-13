@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -110,18 +111,17 @@ func TestOrchestratorEmitsA2UIWidget(t *testing.T) {
 
 func TestOrchestratorActionResumesRefund(t *testing.T) {
 	store := e2eStore(t)
-	// Worker: turn 1 → confirmation; turn 2 (after "да") → refund done.
+	// Worker: turn 1 → confirmation; "да" → card form; valid card → refund.
 	workerModel := llm.NewStub(
 		llm.StubTurn{Call: &genai.FunctionCall{Name: "initiate_refund", Args: map[string]any{"order_id": "1041"}}},
 		llm.StubTurn{Text: "Возврат по заказу 1041 оформлен."},
 	)
 	workerURL := startWorkerWithTools(t, workerModel, store)
-	// Orchestrator: turn 1 delegates the request; turn 2 delegates the "да".
+	// Orchestrator LLM only phrases turn 1; the approve and card-submit buttons
+	// resume the worker directly, bypassing the LLM entirely.
 	orchModel := llm.NewStub(
 		llm.StubTurn{Call: &genai.FunctionCall{Name: "ask_orders_agent", Args: map[string]any{"message": "верни деньги за 1041"}}},
 		llm.StubTurn{Text: "Подтвердите оформление возврата по заказу 1041?"},
-		llm.StubTurn{Call: &genai.FunctionCall{Name: "ask_orders_agent", Args: map[string]any{"message": "да"}}},
-		llm.StubTurn{Text: "Возврат по заказу 1041 оформлен."},
 	)
 	orchURL, _ := startOrchestrator(t, orchModel, workerURL)
 	client := newA2UIClient(t, orchURL)
@@ -133,13 +133,81 @@ func TestOrchestratorActionResumesRefund(t *testing.T) {
 	}
 	t.Logf("turn 1 contextID=%s", client.c.contextID)
 
-	// Turn 2: click "Оформить возврат" → approve_refund action.
-	_, err := client.c.SendAction(context.Background(), "approve_refund", map[string]any{"order_id": "1041"})
+	// Turn 2: click "Оформить возврат" → approve_refund → card form, not refunded yet.
+	parts2, err := client.c.SendAction(context.Background(), "approve_refund", map[string]any{"order_id": "1041"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("turn 2 contextID=%s", client.c.contextID)
-	if o, _ := store.Get("1041"); o.Status != "refunded" {
-		t.Errorf("approve_refund action must resume the task and refund; status=%q", o.Status)
+	if o, _ := store.Get("1041"); o.Status == "refunded" {
+		t.Fatal("refund must not execute before card details are submitted")
 	}
+	if !hasA2UIComponent(parts2, "TextField") {
+		t.Errorf("approve should produce the card form (TextField) as A2UI, got %v", partsSummary(parts2))
+	}
+
+	// Turn 3: submit the card form → refund executes; receipt file attached.
+	parts3, err := client.c.SendAction(context.Background(), "submit_refund_details",
+		map[string]any{"order_id": "1041", "card_number": "4111 1111 1111 1111"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o, _ := store.Get("1041"); o.Status != "refunded" {
+		t.Errorf("submit_refund_details must resume the task and refund; status=%q", o.Status)
+	}
+	var receipt *a2a.Part
+	for _, p := range parts3 {
+		if p != nil && p.Filename != "" {
+			receipt = p
+		}
+	}
+	if receipt == nil {
+		t.Fatalf("completed refund must attach a receipt file, got %v", partsSummary(parts3))
+	}
+	if receipt.MediaType != "text/plain" || !strings.Contains(string(receipt.Raw()), "•••• 1111") {
+		t.Errorf("receipt file must be text/plain with the masked card, got %q: %q",
+			receipt.MediaType, string(receipt.Raw()))
+	}
+}
+
+// hasA2UIComponent reports whether any A2UI DataPart among parts contains a
+// component of the given type.
+func hasA2UIComponent(parts []*a2a.Part, component string) bool {
+	for _, p := range parts {
+		if p == nil {
+			continue
+		}
+		data, ok := p.Data().(map[string]any)
+		if !ok {
+			continue
+		}
+		uc, ok := data["updateComponents"].(map[string]any)
+		if !ok {
+			continue
+		}
+		comps, _ := uc["components"].([]any)
+		for _, c := range comps {
+			if m, ok := c.(map[string]any); ok && m["component"] == component {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// partsSummary renders parts compactly for failure messages.
+func partsSummary(parts []*a2a.Part) []string {
+	var out []string
+	for _, p := range parts {
+		switch {
+		case p == nil:
+			out = append(out, "nil")
+		case p.Filename != "":
+			out = append(out, "file:"+p.Filename)
+		case p.Text() != "":
+			out = append(out, "text:"+p.Text())
+		default:
+			out = append(out, "data")
+		}
+	}
+	return out
 }

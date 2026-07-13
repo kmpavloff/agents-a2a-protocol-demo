@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -123,6 +124,15 @@ public class A2aController {
                 if (done.widget() != null) {
                     trace.logf("  → including %s DataPart in artifact", done.widget().get("kind"));
                     parts.add(widgetPartFromState(done.widget()));
+                }
+                if (done.file() != null) {
+                    trace.logf("  → including file %s (%s, %d bytes)",
+                            done.file().filename(), done.file().mediaType(), done.file().content().length);
+                    Part file = new Part();
+                    file.raw = Base64.getEncoder().encodeToString(done.file().content());
+                    file.filename = done.file().filename();
+                    file.mediaType = done.file().mediaType();
+                    parts.add(file);
                 }
                 task.addArtifact(Artifact.of(parts));
                 task.status = TaskStatus.of(TaskState.COMPLETED, null);

@@ -68,3 +68,15 @@ func TestStats(t *testing.T) {
 		t.Fatalf("stats lookup failed: %+v ok=%v", st, ok)
 	}
 }
+
+func TestOrderURL(t *testing.T) {
+	if got := OrderURL("https://shop.test/orders", "1041"); got != "https://shop.test/orders/1041" {
+		t.Errorf("OrderURL = %q", got)
+	}
+	if got := OrderURL("https://shop.test/orders/", "1041"); got != "https://shop.test/orders/1041" {
+		t.Errorf("trailing slash: OrderURL = %q", got)
+	}
+	if got := OrderURL("", "1041"); got != "" {
+		t.Errorf("empty base must disable links, got %q", got)
+	}
+}

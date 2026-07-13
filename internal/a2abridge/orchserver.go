@@ -18,6 +18,14 @@ import (
 	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/a2ui"
 )
 
+// attachedFile is a downloadable file the worker attached to an artifact,
+// passed through to the browser as an A2A raw part.
+type attachedFile struct {
+	name      string
+	mediaType string
+	data      []byte
+}
+
 type orchExecutor struct {
 	runner *runner.Runner
 	oc     *OrdersClient
@@ -25,17 +33,29 @@ type orchExecutor struct {
 
 	mu      sync.Mutex
 	widgets map[string][]map[string]any // sessionID → widgets produced this turn
+	files   map[string][]attachedFile   // sessionID → files produced this turn
 }
 
 // NewOrchestratorExecutor wraps the orchestrator runner as an A2A server that
 // speaks the A2UI extension: it maps worker widgets to A2UI JSON and translates
 // incoming A2UI button actions into task resumes. trace may be nil.
 func NewOrchestratorExecutor(r *runner.Runner, oc *OrdersClient, trace *Tracer) a2asrv.AgentExecutor {
-	e := &orchExecutor{runner: r, oc: oc, trace: trace, widgets: make(map[string][]map[string]any)}
-	// One global handler routes each widget to its session's slot.
+	e := &orchExecutor{
+		runner:  r,
+		oc:      oc,
+		trace:   trace,
+		widgets: make(map[string][]map[string]any),
+		files:   make(map[string][]attachedFile),
+	}
+	// One global handler routes each widget/file to its session's slot.
 	oc.SetWidgetHandler(func(sessionID string, w map[string]any) {
 		e.mu.Lock()
 		e.widgets[sessionID] = append(e.widgets[sessionID], w)
+		e.mu.Unlock()
+	})
+	oc.SetFileHandler(func(sessionID, filename, mediaType string, data []byte) {
+		e.mu.Lock()
+		e.files[sessionID] = append(e.files[sessionID], attachedFile{name: filename, mediaType: mediaType, data: data})
 		e.mu.Unlock()
 	})
 	return e
@@ -49,9 +69,25 @@ func actionToText(name string, ctx map[string]any) string {
 		return "да"
 	case "decline_refund":
 		return "нет"
+	case "submit_refund_details":
+		// The card number from the form's TextField ({path} binding resolved by
+		// the renderer at click time). Resumed directly — never via the LLM.
+		if s, _ := ctx["card_number"].(string); s != "" {
+			return s
+		}
+		return ""
 	default:
 		return "Пользователь нажал действие: " + name
 	}
+}
+
+// safeActionEcho renders an action's user text for traces, masking payment
+// details so a full card number never lands in the protocol log.
+func safeActionEcho(name, userText string) string {
+	if name == "submit_refund_details" {
+		return maskCard(cardDigits(userText))
+	}
+	return userText
 }
 
 func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {
@@ -91,7 +127,11 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 					if name, actx, ok := a2ui.ParseAction(data); ok {
 						actionName = name
 						userText = actionToText(name, actx)
-						e.trace.Logf("  A2UI action %q ctx=%s → user text %q", name, compactArgs(actx), userText)
+						if name == "submit_refund_details" {
+							delete(actx, "card_number") // keep the number out of the trace
+						}
+						e.trace.Logf("  A2UI action %q ctx=%s → user text %q",
+							name, compactArgs(actx), safeActionEcho(name, userText))
 						break
 					}
 				}
@@ -101,26 +141,42 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 			}
 		}
 
-		// Reset this session's widget slot before the run.
+		// Reset this session's widget/file slots before the run.
 		e.mu.Lock()
 		delete(e.widgets, sessionID)
+		delete(e.files, sessionID)
 		e.mu.Unlock()
 
-		// A yes/no button on a pending confirmation resumes the worker task
-		// DIRECTLY with the canonical answer, bypassing the orchestrator LLM.
-		// The LLM (GLM especially) tends to paraphrase "да" into a full sentence,
-		// which the worker's fail-closed confirmation parser then rejects —
-		// silently declining a refund the user actually approved.
-		if (actionName == "approve_refund" || actionName == "decline_refund") && e.oc.pendingTaskID(sessionID) != "" {
-			e.trace.Logf("  confirmation button %q → resuming worker directly with %q (LLM bypassed)", actionName, userText)
+		// A button on a pending HITL step (yes/no confirmation, or the card
+		// form) resumes the worker task DIRECTLY with the canonical answer,
+		// bypassing the orchestrator LLM. The LLM tends to paraphrase "да" into
+		// a full sentence, which the worker's fail-closed confirmation parser
+		// rejects; and card details should never pass through an LLM at all.
+		directResume := actionName == "approve_refund" || actionName == "decline_refund" ||
+			actionName == "submit_refund_details"
+		if directResume && e.oc.pendingTaskID(sessionID) != "" {
+			e.trace.Logf("  confirmation button %q → resuming worker directly with %q (LLM bypassed)",
+				actionName, safeActionEcho(actionName, userText))
 			result, err := e.oc.ask(ctx, sessionID, userText)
 			if err != nil {
 				e.trace.Logf("  ✖ direct resume error: %v", err)
 				yield(nil, err)
 				return
 			}
-			e.trace.Logf("  → emit: artifact + completed | direct confirmation resume | result=%q", result)
-			if !yield(a2a.NewArtifactEvent(ec, a2a.NewTextPart(strings.TrimSpace(orDefault(result, "Готово.")))), nil) {
+			// The resume may complete the task (receipt widget + file) or pause
+			// it again (the card form after "да") — both carry widgets, and a
+			// completion may carry files; emit them like a normal turn.
+			e.mu.Lock()
+			ws := e.widgets[sessionID]
+			fs := e.files[sessionID]
+			delete(e.widgets, sessionID)
+			delete(e.files, sessionID)
+			e.mu.Unlock()
+			parts := []*a2a.Part{a2a.NewTextPart(strings.TrimSpace(orDefault(stripNeedsInput(result), "Готово.")))}
+			parts = append(parts, e.a2uiParts(a2uiActive, ws)...)
+			parts = append(parts, fileParts(fs)...)
+			e.trace.Logf("  → emit: artifact + completed | direct HITL resume | parts=%d", len(parts))
+			if !yield(a2a.NewArtifactEvent(ec, parts...), nil) {
 				return
 			}
 			yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateCompleted, nil), nil)
@@ -173,30 +229,20 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 		e.trace.Logf("  LLM finished in %s | toolCalls=%d limitHit=%v finalText=%q",
 			time.Since(llmStart).Round(time.Millisecond), toolCalls, limitHit, strings.TrimSpace(finalText))
 
-		// Drain this session's widget slot unconditionally so text-only
-		// sessions don't leak a map entry; only emit A2UI parts when active.
+		// Drain this session's widget/file slots unconditionally so text-only
+		// sessions don't leak map entries; only emit A2UI parts when active.
 		e.mu.Lock()
 		ws := e.widgets[sessionID]
+		fs := e.files[sessionID]
 		delete(e.widgets, sessionID)
+		delete(e.files, sessionID)
 		e.mu.Unlock()
 
-		// Assemble the artifact: text first (fallback), then A2UI parts.
+		// Assemble the artifact: text first (fallback), then A2UI parts, then files.
 		parts := []*a2a.Part{a2a.NewTextPart(strings.TrimSpace(orDefault(finalText, "Готово.")))}
-		if a2uiActive {
-			for _, w := range ws {
-				if msgs, ok := a2ui.FromWidget(w); ok {
-					e.trace.Logf("  A2UI: widget %v → %d message(s) (application/a2ui+json)", w["_kind"], len(msgs))
-					for _, m := range msgs {
-						part := a2a.NewDataPart(m)
-						part.MediaType = a2ui.MIMEType
-						parts = append(parts, part)
-					}
-				}
-			}
-		} else if len(ws) > 0 {
-			e.trace.Logf("  A2UI inactive — %d widget(s) dropped, text-only response", len(ws))
-		}
-		e.trace.Logf("  → emit: artifact + completed | textPart=1 a2uiParts=%d requestTook=%s",
+		parts = append(parts, e.a2uiParts(a2uiActive, ws)...)
+		parts = append(parts, fileParts(fs)...)
+		e.trace.Logf("  → emit: artifact + completed | textPart=1 extraParts=%d requestTook=%s",
 			len(parts)-1, time.Since(reqStart).Round(time.Millisecond))
 		if !yield(a2a.NewArtifactEvent(ec, parts...), nil) {
 			return
@@ -216,6 +262,49 @@ func orDefault(s, def string) string {
 		return def
 	}
 	return s
+}
+
+// stripNeedsInput removes the delegating tool's NEEDS_USER_INPUT sentinel from
+// a directly-resumed result, leaving the bare question for the browser (the
+// accompanying widget carries the interactive form).
+func stripNeedsInput(s string) string {
+	return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(s), "NEEDS_USER_INPUT:"))
+}
+
+// a2uiParts maps collected widgets to A2UI DataParts when the extension is
+// active; otherwise it logs the drop and returns nothing.
+func (e *orchExecutor) a2uiParts(a2uiActive bool, ws []map[string]any) []*a2a.Part {
+	if !a2uiActive {
+		if len(ws) > 0 {
+			e.trace.Logf("  A2UI inactive — %d widget(s) dropped, text-only response", len(ws))
+		}
+		return nil
+	}
+	var parts []*a2a.Part
+	for _, w := range ws {
+		if msgs, ok := a2ui.FromWidget(w); ok {
+			e.trace.Logf("  A2UI: widget %v → %d message(s) (application/a2ui+json)", w["_kind"], len(msgs))
+			for _, m := range msgs {
+				part := a2a.NewDataPart(m)
+				part.MediaType = a2ui.MIMEType
+				parts = append(parts, part)
+			}
+		}
+	}
+	return parts
+}
+
+// fileParts passes worker-attached files through as A2A raw parts (attached
+// regardless of A2UI: files are plain protocol parts, not generative UI).
+func fileParts(fs []attachedFile) []*a2a.Part {
+	var parts []*a2a.Part
+	for _, f := range fs {
+		p := a2a.NewRawPart(f.data)
+		p.Filename = f.name
+		p.MediaType = f.mediaType
+		parts = append(parts, p)
+	}
+	return parts
 }
 
 // withExt returns a context carrying a service-param request to activate the

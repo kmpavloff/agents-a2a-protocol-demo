@@ -150,6 +150,7 @@ environment variable (handy for CI or for keeping the key out of files entirely)
 | `LLM_MODEL` | `local-model` | Model name passed to LM Studio |
 | `LLM_API_KEY` | `lm-studio` | API key (any non-empty string works) |
 | `WORKER_DATA_PATH` | `data/orders.json` | Path to the seed orders file |
+| `ORDER_LINK_BASE` | `https://shop.example.com/orders` | Base URL for order-card links in widgets (`<base>/<id>`) |
 
 > **WSL2 + LM Studio on Windows.** If you run the agents inside WSL2 while LM Studio
 > runs on the Windows host, `http://localhost:1234` usually does **not** reach it
@@ -239,8 +240,15 @@ go run ./cmd/orchestrator --web
 - «последние заказы alice» → renders an **order list**.
 - «верни деньги за 1041» → renders a **confirmation card** with
   **Оформить возврат** / **Отмена** buttons; clicking **Оформить возврат**
-  resumes the A2A task and approves the refund without typing anything. The
-  confirmation card is consumed on click, and the result appears in the feed.
+  resumes the A2A task — which then pauses a **second** time with a **card
+  details form** (an A2UI `TextField` bound to the surface data model). Enter
+  a card number (e.g. the `4111 1111 1111 1111` test number — validated by
+  code with a Luhn check, never by the LLM) and click **Вернуть на карту**:
+  the refund executes, a **receipt card** renders (card masked to `•••• 1111`)
+  and a **«Скачать receipt-1041.txt»** chip appears — the receipt travels as a
+  standard A2A raw (file) part. Both buttons and the form resume the worker
+  task directly, bypassing the LLM, so the card number never passes through
+  the model in web mode.
 
 Chat messages and widgets share one **chronological feed** (each request is
 followed by its widget), a spinner shows while the agent is working, and each
@@ -301,14 +309,26 @@ This scenario exercises all three A2A features at once.
    sending the user's answer as a new message. This is the key A2A feature: the
    worker does not start over; it continues where it left off.
 
-6. **Worker LLM** calls `initiate_refund("1041")`. The tool marks the order
-   refunded and returns a success result. The A2A task transitions to `completed`.
+6. **Worker LLM** calls `initiate_refund("1041")` — but the refund does not run
+   yet: the task pauses in `input-required` asking the user to **confirm**
+   (да/нет), and after «да» pauses a **second** time asking for the **card
+   number** the money goes to (validated by code: 13–19 digits + Luhn; the
+   full number is never logged, echoed, or shown to the LLM).
 
-7. **Orchestrator LLM** formats the final confirmation and prints it to the TUI:
+7. Once a valid card is provided, the refund executes and the task transitions
+   to `completed` with a **refund receipt**: a receipt card (card masked to
+   `•••• 1111`) plus a downloadable `receipt-1041.txt` attached as a standard
+   A2A raw (file) part — the TUI saves it next to the REPL, the browser shows
+   a download chip:
 
    ```
-   Refund for order #1041 has been initiated. You should receive a confirmation
-   email within 24 hours.
+   ┌─ Квитанция о возврате
+   │ Квитанция №: RF-1041-20260713-140256
+   │ Заказ:       #1041 — USB-C хаб
+   │ Сумма:       34.5 EUR
+   │ Карта:       •••• 1111
+   └─
+   💾 Квитанция сохранена: ./receipt-1041.txt
    ```
 
 The `input-required` state and task resumption are the A2A protocol in action —

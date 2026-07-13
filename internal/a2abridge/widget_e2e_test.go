@@ -55,6 +55,9 @@ func TestWorkerEmitsOrderWidget(t *testing.T) {
 	if o["status_label"] != "доставлен" {
 		t.Errorf("status_label = %v, want доставлен", o["status_label"])
 	}
+	if o["url"] != "https://shop.test/orders/1041" {
+		t.Errorf("order url = %v, want https://shop.test/orders/1041", o["url"])
+	}
 }
 
 // TestWorkerEmitsOrderListWidget: list_recent_orders emits a widget/order_list
@@ -81,6 +84,9 @@ func TestWorkerEmitsOrderListWidget(t *testing.T) {
 	row, _ := rows[0].(map[string]any)
 	if row["id"] != "1041" {
 		t.Errorf("row id = %v, want 1041", row["id"])
+	}
+	if row["url"] != "https://shop.test/orders/1041" {
+		t.Errorf("row url = %v, want https://shop.test/orders/1041", row["url"])
 	}
 }
 

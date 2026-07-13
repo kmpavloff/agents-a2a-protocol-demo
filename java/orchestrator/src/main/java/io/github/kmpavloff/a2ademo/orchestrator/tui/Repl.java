@@ -7,6 +7,9 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
@@ -37,6 +40,17 @@ public class Repl {
         orders.setWidgetHandler((sessionId, w) -> {
             renderWidget(w);
             widgetShown = true;
+        });
+        // Files (e.g. the refund receipt) are saved next to the REPL and the
+        // path is printed, since a terminal cannot "download" anything.
+        orders.setFileHandler((sessionId, filename, mediaType, data) -> {
+            try {
+                Path name = Path.of(Path.of(filename).getFileName().toString());
+                Files.write(name, data);
+                System.out.printf("%s💾 Квитанция сохранена: ./%s%s%n", CYAN, name, RESET);
+            } catch (IOException | InvalidPathException e) {
+                System.out.printf("%s[файл %s не сохранён: %s]%s%n", GRAY, filename, e.getMessage(), RESET);
+            }
         });
 
         BufferedReader in = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
@@ -93,15 +107,28 @@ public class Repl {
                     }
                     field("Клиент:", o.get("customer"));
                     field("Дата:", o.get("created"));
+                    field("Ссылка:", o.get("url"));
                 }
+            }
+            case "widget/refund_receipt" -> {
+                field("Квитанция №:", w.get("receipt_id"));
+                System.out.printf("%s│%s %-12s #%s — %s%n", CYAN, RESET, "Заказ:", w.get("order_id"), w.get("item"));
+                if (w.get("amount") != null) {
+                    System.out.printf("%s│%s %-12s %s %s%n", CYAN, RESET, "Сумма:", w.get("amount"), w.get("currency"));
+                }
+                if (w.get("card_last4") instanceof String last4 && !last4.isEmpty()) {
+                    System.out.printf("%s│%s %-12s •••• %s%n", CYAN, RESET, "Карта:", last4);
+                }
+                field("Дата:", w.get("created"));
             }
             case "widget/order_list" -> {
                 if (w.get("orders") instanceof List<?> rows) {
                     for (Object r : rows) {
                         if (r instanceof Map<?, ?> o) {
-                            System.out.printf("%s│%s #%s  %s — %s (%s %s, %s)%n", CYAN, RESET,
+                            String link = o.get("url") instanceof String u && !u.isEmpty() ? "  → " + u : "";
+                            System.out.printf("%s│%s #%s  %s — %s (%s %s, %s)%s%n", CYAN, RESET,
                                     o.get("id"), o.get("item"), o.get("status_label"),
-                                    o.get("amount"), o.get("currency"), o.get("created"));
+                                    o.get("amount"), o.get("currency"), o.get("created"), link);
                         }
                     }
                 }

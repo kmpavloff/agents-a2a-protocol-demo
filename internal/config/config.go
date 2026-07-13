@@ -15,10 +15,14 @@ type LLMConfig struct {
 }
 
 type WorkerConfig struct {
-	ListenAddr string    `yaml:"listen_addr"`
-	PublicURL  string    `yaml:"public_url"`
-	DataPath   string    `yaml:"data_path"`
-	LLM        LLMConfig `yaml:"llm"`
+	ListenAddr string `yaml:"listen_addr"`
+	PublicURL  string `yaml:"public_url"`
+	DataPath   string `yaml:"data_path"`
+	// OrderLinkBase is the base URL of the customer-facing order page; widgets
+	// carry base/<id> links so a client can open the order card. Empty disables
+	// links entirely.
+	OrderLinkBase string    `yaml:"order_link_base"`
+	LLM           LLMConfig `yaml:"llm"`
 }
 
 type OrchestratorConfig struct {
@@ -50,6 +54,10 @@ func LoadWorker(path string) (WorkerConfig, error) {
 	c.ListenAddr = env("WORKER_LISTEN_ADDR", c.ListenAddr)
 	c.PublicURL = env("WORKER_PUBLIC_URL", c.PublicURL)
 	c.DataPath = env("WORKER_DATA_PATH", c.DataPath)
+	c.OrderLinkBase = env("ORDER_LINK_BASE", c.OrderLinkBase)
+	if c.OrderLinkBase == "" {
+		c.OrderLinkBase = "https://shop.example.com/orders"
+	}
 	c.LLM.applyEnv()
 	if c.ListenAddr == "" {
 		return c, fmt.Errorf("worker config: listen_addr is required")

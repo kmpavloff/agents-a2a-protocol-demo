@@ -5,10 +5,15 @@ import io.github.kmpavloff.a2ademo.common.llm.ChatMessage;
 import io.github.kmpavloff.a2ademo.common.llm.ChatModel;
 import io.github.kmpavloff.a2ademo.common.llm.ToolCall;
 import io.github.kmpavloff.a2ademo.common.trace.Tracer;
+import io.github.kmpavloff.a2ademo.common.util.Cards;
 import io.github.kmpavloff.a2ademo.worker.orders.OrderTools;
 import io.github.kmpavloff.a2ademo.worker.orders.Widgets;
 
+import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -61,13 +66,24 @@ public class WorkerAgent {
     private final Tracer trace;
 
     private final Map<String, List<ChatMessage>> sessions = new ConcurrentHashMap<>();
-    private final Map<String, PendingConfirm> pendingConfirm = new ConcurrentHashMap<>();
+    private final Map<String, PendingHITL> pendingConfirm = new ConcurrentHashMap<>();
 
-    private record PendingConfirm(String callId, String orderId) {}
+    /**
+     * The two-step refund pause: first the yes/no confirmation, then (after
+     * approval) the card details the money goes to.
+     */
+    private record PendingHITL(boolean awaitingCard, String callId, String orderId) {}
 
-    /** Outcome of one A2A turn: completed with text (+ optional widget), or paused for input. */
+    /** A downloadable file attached to a completed turn (e.g. the refund receipt). */
+    public record ReceiptFile(String filename, String mediaType, byte[] content) {}
+
+    /** Outcome of one A2A turn: completed with text (+ optional widget/file), or paused for input. */
     public sealed interface Outcome {
-        record Completed(String text, Map<String, Object> widget) implements Outcome {}
+        record Completed(String text, Map<String, Object> widget, ReceiptFile file) implements Outcome {
+            public Completed(String text, Map<String, Object> widget) {
+                this(text, widget, null);
+            }
+        }
 
         record InputRequired(String question, Map<String, Object> widget, String widgetKind) implements Outcome {}
     }
@@ -87,24 +103,12 @@ public class WorkerAgent {
     public Outcome run(String contextId, String userText) {
         List<ChatMessage> history = sessions.computeIfAbsent(contextId, k -> new ArrayList<>());
 
-        PendingConfirm pending = pendingConfirm.remove(contextId);
-        if (pending != null) {
-            boolean approved = parseAffirmative(userText);
-            trace.logf("  confirmation answer=\"%s\" → approved=%s", userText, approved);
-            if (!approved) {
-                // Close the dangling tool call so the history stays valid for the
-                // next turn, then short-circuit without asking the LLM.
-                history.add(ChatMessage.tool(pending.callId(),
-                        "Пользователь отклонил возврат. Возврат НЕ выполнен."));
-                trace.logf("  → emit: artifact + completed | refund declined by user");
-                return new Outcome.Completed("Возврат отменён по вашему решению.", null);
-            }
-            // Approved: the refund runs NOW, by code, with the captured order id —
-            // the model never gets to re-decide the arguments of a money move.
-            String result = executeRefund(pending.orderId());
-            trace.logf("%s  · инструмент initiate_refund → LLM: результат, снова спрашиваю LLM%s", GRAY, RESET);
-            history.add(ChatMessage.tool(pending.callId(), result));
-            return runLoop(contextId, history, 1);
+        PendingHITL pending = pendingConfirm.remove(contextId);
+        if (pending != null && !pending.awaitingCard()) {
+            return onConfirmationAnswer(contextId, history, pending, userText);
+        }
+        if (pending != null && pending.awaitingCard()) {
+            return onCardAnswer(contextId, history, pending, userText);
         }
 
         trace.logf("  user text=\"%s\" — running orders agent (LLM + tools)", userText);
@@ -112,9 +116,112 @@ public class WorkerAgent {
         return runLoop(contextId, history, 0);
     }
 
-    private String executeRefund(String orderId) {
-        return tools.execute(new ToolCall("hitl_refund", "initiate_refund",
-                "{\"order_id\":\"" + orderId + "\"}")).text();
+    /** Step 1 of the refund HITL: the yes/no confirmation answer. */
+    private Outcome onConfirmationAnswer(String contextId, List<ChatMessage> history,
+                                         PendingHITL pending, String userText) {
+        boolean approved = parseAffirmative(userText);
+        trace.logf("  confirmation answer=\"%s\" → approved=%s", userText, approved);
+        if (!approved) {
+            // Close the dangling tool call so the history stays valid for the
+            // next turn, then short-circuit without asking the LLM.
+            history.add(ChatMessage.tool(pending.callId(),
+                    "Пользователь отклонил возврат. Возврат НЕ выполнен."));
+            trace.logf("  → emit: artifact + completed | refund declined by user");
+            return new Outcome.Completed("Возврат отменён по вашему решению.", null);
+        }
+        // Approved → the refund still does NOT run: ask for the card the money
+        // goes to. The same A2A task pauses input-required a second time.
+        pendingConfirm.put(contextId, new PendingHITL(true, pending.callId(), pending.orderId()));
+        String question = String.format(
+                "Укажите номер карты для возврата средств по заказу %s (13–19 цифр).", pending.orderId());
+        trace.logf("  → emit: input-required (card details) | order=%s", pending.orderId());
+        return new Outcome.InputRequired(question,
+                copyOf(Widgets.refundFormWidget(pending.orderId(), question, false)),
+                Widgets.KIND_REFUND_FORM);
+    }
+
+    /**
+     * Step 2: the card-number reply. Validated by CODE (Luhn), never by the
+     * LLM; the full number is neither logged nor echoed back.
+     */
+    private Outcome onCardAnswer(String contextId, List<ChatMessage> history,
+                                 PendingHITL pending, String userText) {
+        String digits = Cards.digits(userText);
+        if (digits.isEmpty()) {
+            trace.logf("  card reply carries no digits → treating as cancellation");
+            history.add(ChatMessage.tool(pending.callId(),
+                    "Пользователь не передал реквизиты. Возврат НЕ выполнен."));
+            return new Outcome.Completed("Возврат отменён: реквизиты карты не получены.", null);
+        }
+        if (!Cards.valid(digits)) {
+            pendingConfirm.put(contextId, pending); // stay at the card step
+            trace.logf("  card %s failed validation → re-asking", Cards.mask(digits));
+            String errText = "Номер карты некорректен. Проверьте его и отправьте ещё раз (13–19 цифр).";
+            return new Outcome.InputRequired(errText,
+                    copyOf(Widgets.refundFormWidget(pending.orderId(), errText, true)),
+                    Widgets.KIND_REFUND_FORM);
+        }
+        String last4 = digits.substring(digits.length() - 4);
+        trace.logf("  card %s accepted → executing refund", Cards.mask(digits));
+
+        // The refund runs NOW, by code, with the captured order id — the model
+        // never re-decides the arguments of a money move.
+        OrderTools.ToolResult result = tools.execute(new ToolCall(pending.callId(), "initiate_refund",
+                "{\"order_id\":\"" + pending.orderId() + "\"}"));
+        trace.logf("%s  · инструмент initiate_refund → LLM: результат, снова спрашиваю LLM%s", GRAY, RESET);
+        history.add(ChatMessage.tool(pending.callId(), result.text()));
+        Outcome outcome = runLoop(contextId, history, 1);
+
+        // Success → enrich the tool's receipt widget with the payment context
+        // and attach the downloadable receipt file.
+        if (outcome instanceof Outcome.Completed
+                && result.widget() != null
+                && Widgets.KIND_REFUND_RECEIPT.equals(result.widget().get("kind"))) {
+            Map<String, Object> receipt = result.widget();
+            ReceiptFile file = enrichReceipt(receipt, last4);
+            String text = String.format(
+                    "Возврат оформлен. Средства поступят на карту •••• %s. Квитанция — во вложении.", last4);
+            trace.logf("  → receipt %s (%s, %d bytes)", receipt.get("receipt_id"),
+                    file.filename(), file.content().length);
+            return new Outcome.Completed(text, receipt, file);
+        }
+        return outcome;
+    }
+
+    /**
+     * Stamps the payment context (masked card, receipt id, creation time,
+     * filename) onto the receipt widget and builds the downloadable file.
+     */
+    private static ReceiptFile enrichReceipt(Map<String, Object> w, String cardLast4) {
+        LocalDateTime now = LocalDateTime.now();
+        String receiptId = "RF-" + w.get("order_id") + "-"
+                + now.format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
+        String created = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+        String filename = "receipt-" + w.get("order_id") + ".txt";
+        w.put("receipt_id", receiptId);
+        w.put("card_last4", cardLast4);
+        w.put("created", created);
+        w.put("filename", filename);
+
+        String content = """
+                КВИТАНЦИЯ О ВОЗВРАТЕ
+                =====================
+                Квитанция №:      %s
+                Дата:             %s
+                Заказ:            #%s — %s
+                Сумма возврата:   %s %s
+                Карта получателя: •••• %s
+                Статус:           возврат оформлен
+
+                Документ сформирован автоматически агентом orders-agent (A2A demo).
+                """.formatted(receiptId, created, w.get("order_id"), w.get("item"),
+                w.get("amount"), w.get("currency"), cardLast4);
+        return new ReceiptFile(filename, "text/plain", content.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** Defensive copy of a widget payload (the builders return fresh maps, but cheap). */
+    private static Map<String, Object> copyOf(Map<String, Object> w) {
+        return new LinkedHashMap<>(w);
     }
 
     private Outcome runLoop(String contextId, List<ChatMessage> history, int toolCalls) {
@@ -159,7 +266,7 @@ public class WorkerAgent {
                 String orderId = call.firstArg(OrderTools.ORDER_ID_KEYS);
                 if (!orderId.isEmpty()) {
                     history.add(ChatMessage.assistantToolCall(call));
-                    pendingConfirm.put(contextId, new PendingConfirm(call.id(), orderId));
+                    pendingConfirm.put(contextId, new PendingHITL(false, call.id(), orderId));
                     String question = String.format("Подтвердите оформление возврата по заказу %s? (да/нет)", orderId);
                     trace.logf("  ⏸ tool confirmation requested | callID=%s question=\"%s\"", call.id(), question);
                     trace.logf("  → emit: input-required (confirmation) | question=\"%s\"", question);

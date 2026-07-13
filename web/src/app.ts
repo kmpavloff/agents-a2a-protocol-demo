@@ -1,3 +1,10 @@
+// Buffer polyfill MUST come first: @a2a-js/sdk's generated proto helpers call
+// globalThis.Buffer unconditionally (bytesFromBase64 / base64FromBytes), which
+// only exists in Node. Without this, receiving a file (raw) part — e.g. the
+// refund receipt — crashes in the browser with "Buffer is not defined".
+import {Buffer} from 'buffer';
+(globalThis as any).Buffer ??= Buffer;
+
 import {LitElement, html, css, nothing} from 'lit';
 import {customElement, state} from 'lit/decorators.js';
 import {unsafeHTML} from 'lit/directives/unsafe-html.js';
@@ -7,7 +14,7 @@ import {MessageProcessor} from '@a2ui/web_core/v0_9';
 import {basicCatalog, Context} from '@a2ui/lit/v0_9';
 import '@a2ui/lit/v0_9'; // registers <a2ui-surface>
 import {renderMarkdown} from '@a2ui/markdown-it';
-import {A2UIClient, onA2ATraffic, type TrafficEntry} from './client.js';
+import {A2UIClient, onA2ATraffic, type FileAttachment, type TrafficEntry} from './client.js';
 
 // highlightJson pretty-prints a value and wraps JSON tokens in <span> classes
 // for syntax colouring. The raw JSON is HTML-escaped FIRST, so the only markup
@@ -45,7 +52,8 @@ function isBriefComment(text: string): boolean {
 type Item =
   | {kind: 'user'; text: string}
   | {kind: 'assistant'; text: string}
-  | {kind: 'widget'; surface: any};
+  | {kind: 'widget'; surface: any}
+  | {kind: 'file'; name: string; href: string};
 
 @customElement('orders-app')
 export class OrdersApp extends LitElement {
@@ -89,11 +97,14 @@ export class OrdersApp extends LitElement {
   // Runs one exchange: optionally record a user entry, call the agent, then
   // append either widget(s) or the plain-text reply (a widget already conveys
   // the message, so the text is suppressed when widgets are present).
-  async #turn(userText: string | null, run: () => Promise<{a2ui: any[]; text: string}>) {
+  async #turn(
+    userText: string | null,
+    run: () => Promise<{a2ui: any[]; text: string; files?: FileAttachment[]}>,
+  ) {
     if (userText) this._items = [...this._items, {kind: 'user', text: userText}];
     this._busy = true;
     try {
-      const {a2ui, text} = await run();
+      const {a2ui, text, files} = await run();
       if (a2ui.length) {
         // Keep a short comment above the widget; drop it if it restates the
         // widget's data (long / table) so the two never duplicate each other.
@@ -103,6 +114,14 @@ export class OrdersApp extends LitElement {
         this.#processor.processMessages(a2ui);
       } else if (text) {
         this._items = [...this._items, {kind: 'assistant', text}];
+      }
+      // Attached files (e.g. the refund receipt) become download chips. The
+      // Blob URL keeps the bytes local — nothing is uploaded anywhere.
+      for (const f of files ?? []) {
+        const href = URL.createObjectURL(
+          new Blob([f.bytes as BlobPart], {type: f.mediaType}),
+        );
+        this._items = [...this._items, {kind: 'file', name: f.name, href}];
       }
     } catch (err) {
       console.error('turn failed:', err);
@@ -189,6 +208,23 @@ export class OrdersApp extends LitElement {
       padding: 1px 8px;
       border: 1px solid #d0d7de;
       border-radius: 999px;
+    }
+    .file-chip {
+      align-self: flex-start;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 14px;
+      border: 1px solid #d0d7de;
+      border-radius: 999px;
+      background: #f6f8fa;
+      color: #0b57d0;
+      font-size: 14px;
+      font-weight: 600;
+      text-decoration: none;
+    }
+    .file-chip:hover {
+      background: #eef2f6;
     }
     .thinking {
       align-self: flex-start;
@@ -293,6 +329,11 @@ export class OrdersApp extends LitElement {
         <span class="widget-tag">🧩 виджет</span>
         <a2ui-surface .surface=${it.surface}></a2ui-surface>
       </div>`;
+    }
+    if (it.kind === 'file') {
+      return html`<a class="file-chip" href=${it.href} download=${it.name}>
+        💾 Скачать ${it.name}
+      </a>`;
     }
     if (it.kind === 'assistant') {
       // Render the agent's markdown (e.g. **bold**) instead of showing the raw

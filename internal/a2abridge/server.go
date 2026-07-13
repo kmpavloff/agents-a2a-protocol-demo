@@ -60,18 +60,26 @@ func compactArgs(args map[string]any) string {
 	return fmt.Sprintf("%v", args)
 }
 
+// pendingHITL tracks the two-step refund pause for a session: first the yes/no
+// confirmation, then (after approval) the card details for the refund.
+type pendingHITL struct {
+	awaitingCard bool   // false: awaiting yes/no; true: awaiting the card number
+	callID       string // adk_request_confirmation call ID to resume
+	orderID      string // order the refund applies to (for prompts/widgets)
+}
+
 type executor struct {
 	runner *runner.Runner
 	trace  *Tracer
 
 	mu             sync.Mutex
-	pendingConfirm map[string]string // A2A contextID → adk_request_confirmation call ID
+	pendingConfirm map[string]pendingHITL // keyed by A2A contextID
 }
 
 // NewExecutor wraps an adk Runner as an a2asrv.AgentExecutor.
 // trace may be nil to disable protocol tracing.
 func NewExecutor(r *runner.Runner, trace *Tracer) a2asrv.AgentExecutor {
-	return &executor{runner: r, trace: trace, pendingConfirm: make(map[string]string)}
+	return &executor{runner: r, trace: trace, pendingConfirm: make(map[string]pendingHITL)}
 }
 
 // Execute implements a2asrv.AgentExecutor.
@@ -105,14 +113,17 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 		}
 
 		e.mu.Lock()
-		confirmCallID, awaitingConfirm := e.pendingConfirm[sessionID]
-		if awaitingConfirm {
+		p, hasPending := e.pendingConfirm[sessionID]
+		if hasPending {
 			delete(e.pendingConfirm, sessionID)
 		}
 		e.mu.Unlock()
 
 		var msg *genai.Content
-		if awaitingConfirm {
+		var cardLast4 string // set when this turn carries validated card details
+		switch {
+		case hasPending && !p.awaitingCard:
+			// Step 1 of the refund HITL: the yes/no confirmation answer.
 			approved := parseAffirmative(userText)
 			e.trace.Logf("  confirmation answer=%q → approved=%v", userText, approved)
 			if !approved {
@@ -125,13 +136,56 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 				yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateCompleted, nil), nil)
 				return
 			}
+			// Approved → the refund still does NOT run: ask for the card the
+			// money goes to. Same task pauses input-required a second time.
+			e.mu.Lock()
+			e.pendingConfirm[sessionID] = pendingHITL{awaitingCard: true, callID: p.callID, orderID: p.orderID}
+			e.mu.Unlock()
+			question := refundCardQuestion(p.orderID)
+			e.trace.Logf("  → emit: input-required (card details) | order=%s", p.orderID)
+			ask := a2a.NewMessage(a2a.MessageRoleAgent,
+				a2a.NewTextPart(question),
+				refundFormWidget(p.orderID, question, false),
+			)
+			yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateInputRequired, ask), nil)
+			return
+
+		case hasPending && p.awaitingCard:
+			// Step 2: the card-number reply. Validated by CODE (Luhn), never by
+			// the LLM; the full number is neither logged nor echoed back.
+			digits := cardDigits(userText)
+			if digits == "" {
+				e.trace.Logf("  card reply carries no digits → treating as cancellation")
+				e.trace.Logf("  → emit: artifact + completed | refund cancelled at card step")
+				if !yield(a2a.NewArtifactEvent(ec, a2a.NewTextPart("Возврат отменён: реквизиты карты не получены.")), nil) {
+					return
+				}
+				yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateCompleted, nil), nil)
+				return
+			}
+			if !validCard(digits) {
+				e.mu.Lock()
+				e.pendingConfirm[sessionID] = p // stay at the card step
+				e.mu.Unlock()
+				e.trace.Logf("  card %s failed validation → re-asking", maskCard(digits))
+				errText := "Номер карты некорректен. Проверьте его и отправьте ещё раз (13–19 цифр)."
+				ask := a2a.NewMessage(a2a.MessageRoleAgent,
+					a2a.NewTextPart(errText),
+					refundFormWidget(p.orderID, errText, true),
+				)
+				yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateInputRequired, ask), nil)
+				return
+			}
+			cardLast4 = digits[len(digits)-4:]
+			e.trace.Logf("  card %s accepted → executing refund", maskCard(digits))
 			fr := &genai.FunctionResponse{
 				Name:     toolconfirmation.FunctionCallName,
-				ID:       confirmCallID,
+				ID:       p.callID,
 				Response: map[string]any{"confirmed": true},
 			}
 			msg = &genai.Content{Role: string(genai.RoleUser), Parts: []*genai.Part{{FunctionResponse: fr}}}
-		} else {
+
+		default:
 			e.trace.Logf("  user text=%q — running orders agent (LLM + tools)", userText)
 			msg = genai.NewContentFromText(userText, genai.RoleUser)
 		}
@@ -219,7 +273,7 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 		// 5. Confirmation requested → pause the task as input-required.
 		if capturedCallID != "" {
 			e.mu.Lock()
-			e.pendingConfirm[sessionID] = capturedCallID
+			e.pendingConfirm[sessionID] = pendingHITL{callID: capturedCallID, orderID: capturedOrderID}
 			e.mu.Unlock()
 			e.trace.Logf("  → emit: input-required (confirmation) | question=%q", confirmQuestion)
 			// Text part is the fallback for UI-less clients; the DataPart carries
@@ -248,12 +302,24 @@ func (e *executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 		if artifactText == "" {
 			artifactText = "Готово."
 		}
+		// A refund executed with card details enriches the tool's receipt widget
+		// with the payment context and attaches the receipt as a downloadable
+		// file (a plain A2A raw part).
+		var filePart *a2a.Part
+		if cardLast4 != "" && capturedWidget != nil && capturedWidget["kind"] == "widget/refund_receipt" {
+			filePart = enrichReceipt(capturedWidget, cardLast4)
+			artifactText = fmt.Sprintf("Возврат оформлен. Средства поступят на карту •••• %s. Квитанция — во вложении.", cardLast4)
+		}
 		// Text part first (human/LLM fallback); append a widget DataPart when a
 		// read tool produced structured data this turn.
 		parts := []*a2a.Part{a2a.NewTextPart(artifactText)}
 		if w := widgetPartFromState(capturedWidget); w != nil {
 			e.trace.Logf("  → including %v DataPart in artifact", capturedWidget["kind"])
 			parts = append(parts, w)
+		}
+		if filePart != nil {
+			e.trace.Logf("  → including receipt file %q (%s, %d bytes)", filePart.Filename, filePart.MediaType, len(filePart.Raw()))
+			parts = append(parts, filePart)
 		}
 		e.trace.Logf("  → emit: artifact + completed | artifact=%q", artifactText)
 		if !yield(a2a.NewArtifactEvent(ec, parts...), nil) {
@@ -342,6 +408,74 @@ func refundConfirmWidget(orderID, message string) *a2a.Part {
 			{"id": "decline", "label": "Отмена", "style": "secondary"},
 		},
 	})
+}
+
+// widgetKindRefundForm marks the card-details form widget shown after the
+// refund confirmation; widgetKindRefundReceipt marks the final receipt.
+const (
+	widgetKindRefundForm    = "widget/refund_form"
+	widgetKindRefundReceipt = "widget/refund_receipt"
+)
+
+// refundCardQuestion is the text prompt of the card-details step.
+func refundCardQuestion(orderID string) string {
+	if orderID != "" {
+		return fmt.Sprintf("Укажите номер карты для возврата средств по заказу %s (13–19 цифр).", orderID)
+	}
+	return "Укажите номер карты для возврата средств (13–19 цифр)."
+}
+
+// refundFormWidget builds the card-details form DataPart shown after the user
+// confirmed the refund. isError marks a re-ask after failed validation.
+func refundFormWidget(orderID, message string, isError bool) *a2a.Part {
+	severity := "info"
+	if isError {
+		severity = "error"
+	}
+	return widgetPart(widgetKindRefundForm, map[string]any{
+		"type":     "form",
+		"title":    "Реквизиты для возврата",
+		"message":  message,
+		"severity": severity,
+		"order_id": orderID,
+		"fields": []map[string]any{
+			{"id": "card_number", "label": "Номер карты", "placeholder": "0000 0000 0000 0000"},
+		},
+		"actions": []map[string]any{
+			{"id": "submit_refund_details", "label": "Вернуть на карту", "style": "primary"},
+			{"id": "decline", "label": "Отмена", "style": "secondary"},
+		},
+	})
+}
+
+// enrichReceipt stamps the payment context (masked card, receipt id, creation
+// time, filename) onto the tool-built receipt widget and returns the matching
+// downloadable receipt file as an A2A raw part.
+func enrichReceipt(w map[string]any, cardLast4 string) *a2a.Part {
+	now := time.Now()
+	receiptID := fmt.Sprintf("RF-%v-%s", w["order_id"], now.Format("20060102-150405"))
+	filename := fmt.Sprintf("receipt-%v.txt", w["order_id"])
+	w["receipt_id"] = receiptID
+	w["card_last4"] = cardLast4
+	w["created"] = now.Format("2006-01-02 15:04:05")
+	w["filename"] = filename
+
+	content := fmt.Sprintf(`КВИТАНЦИЯ О ВОЗВРАТЕ
+=====================
+Квитанция №:      %s
+Дата:             %v
+Заказ:            #%v — %v
+Сумма возврата:   %v %v
+Карта получателя: •••• %s
+Статус:           возврат оформлен
+
+Документ сформирован автоматически агентом orders-agent (A2A demo).
+`, receiptID, w["created"], w["order_id"], w["item"], w["amount"], w["currency"], cardLast4)
+
+	part := a2a.NewRawPart([]byte(content))
+	part.Filename = filename
+	part.MediaType = "text/plain"
+	return part
 }
 
 // refundOrderID extracts the order id from the captured initiate_refund call,

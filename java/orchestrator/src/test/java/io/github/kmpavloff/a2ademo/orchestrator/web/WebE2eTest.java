@@ -146,6 +146,63 @@ class WebE2eTest {
     }
 
     @Test
+    void cardFormSubmitResumesWorkerWithCardBypassingLlm() throws IOException {
+        // Turn 1: worker pauses input-required with the confirmation widget.
+        workerResults.add("""
+                {"task":{"id":"t7","contextId":"wc7","status":{"state":"TASK_STATE_INPUT_REQUIRED",
+                 "message":{"messageId":"m1","role":"ROLE_AGENT","parts":[
+                   {"text":"Подтвердите оформление возврата по заказу 1041? (да/нет)"},
+                   {"data":{"type":"confirmation","message":"?","order_id":"1041","actions":[]},
+                    "metadata":{"kind":"widget/confirmation","version":1}}]}}}}
+                """);
+        model.then(ChatModel.Completion.call(new ToolCall("c1", "ask_orders_agent", "{\"message\":\"верни деньги за 1041\"}")))
+                .then(ChatModel.Completion.text("Подтвердите?"));
+        JsonNode task1 = invoke("{\"text\":\"верни деньги за 1041\"}", null, true).path("result").path("task");
+        String contextId = task1.path("contextId").asText();
+
+        // Turn 2: approve → worker asks for the card (form widget), LLM bypassed.
+        workerResults.add("""
+                {"task":{"id":"t7","contextId":"wc7","status":{"state":"TASK_STATE_INPUT_REQUIRED",
+                 "message":{"messageId":"m2","role":"ROLE_AGENT","parts":[
+                   {"text":"Укажите номер карты для возврата средств по заказу 1041 (13–19 цифр)."},
+                   {"data":{"type":"form","title":"Реквизиты для возврата","message":"Укажите номер карты","severity":"info","order_id":"1041",
+                     "fields":[{"id":"card_number","label":"Номер карты"}],
+                     "actions":[{"id":"submit_refund_details","label":"Вернуть на карту"}]},
+                    "metadata":{"kind":"widget/refund_form","version":1}}]}}}}
+                """);
+        JsonNode task2 = invoke("""
+                {"data":{"version":"v0.9","action":{"name":"approve_refund","context":{"order_id":"1041"}}},
+                 "mediaType":"application/a2ui+json"}
+                """, contextId, true).path("result").path("task");
+        JsonNode parts2 = task2.path("artifacts").get(0).path("parts");
+        boolean hasTextField = parts2.toString().contains("TextField");
+        assertTrue(hasTextField, "approve must produce the card form as A2UI: " + parts2);
+
+        // Turn 3: submit the form — the card number resumes the worker directly
+        // (empty LLM script proves the bypass) and the receipt file passes through.
+        workerResults.add("""
+                {"task":{"id":"t7","contextId":"wc7","status":{"state":"TASK_STATE_COMPLETED"},
+                 "artifacts":[{"artifactId":"a1","parts":[
+                   {"text":"Возврат оформлен. Средства поступят на карту •••• 1111."},
+                   {"data":{"order_id":"1041","card_last4":"1111","receipt_id":"RF-1"},
+                    "metadata":{"kind":"widget/refund_receipt","version":1}},
+                   {"raw":"0JrQstC40YLQsNC90YbQuNGP","filename":"receipt-1041.txt","mediaType":"text/plain"}]}]}}
+                """);
+        JsonNode task3 = invoke("""
+                {"data":{"version":"v0.9","action":{"name":"submit_refund_details",
+                  "context":{"order_id":"1041","card_number":"4111 1111 1111 1111"}}},
+                 "mediaType":"application/a2ui+json"}
+                """, contextId, true).path("result").path("task");
+        assertEquals("TASK_STATE_COMPLETED", task3.path("status").path("state").asText());
+        JsonNode parts3 = task3.path("artifacts").get(0).path("parts");
+        assertTrue(parts3.get(0).path("text").asText().contains("•••• 1111"));
+        JsonNode file = parts3.get(parts3.size() - 1);
+        assertEquals("receipt-1041.txt", file.path("filename").asText());
+        assertEquals("text/plain", file.path("mediaType").asText());
+        assertEquals("0JrQstC40YLQsNC90YbQuNGP", file.path("raw").asText(), "receipt bytes must pass through unchanged");
+    }
+
+    @Test
     void confirmationButtonResumesWorkerDirectlyBypassingLlm() throws IOException {
         // Turn 1: worker pauses input-required with a confirmation widget.
         workerResults.add("""

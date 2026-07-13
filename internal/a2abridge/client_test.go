@@ -67,7 +67,7 @@ func startWorker(t *testing.T, model *llm.Stub) string {
 // so tool side effects (e.g. refunds) are observable in tests.
 func startWorkerWithTools(t *testing.T, model *llm.Stub, store *orders.Store) string {
 	t.Helper()
-	return startWorkerServer(t, model, orders.Tools(store))
+	return startWorkerServer(t, model, orders.Tools(store, "https://shop.test/orders"))
 }
 
 func TestClientRejectsEmptyMessageWithoutA2ACall(t *testing.T) {

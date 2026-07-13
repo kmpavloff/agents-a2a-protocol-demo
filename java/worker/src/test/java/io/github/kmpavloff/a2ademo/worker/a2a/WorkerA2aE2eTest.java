@@ -63,7 +63,7 @@ class WorkerA2aE2eTest {
                 """);
         store = OrderStore.load(seed.toString());
         model = new StubModel();
-        WorkerAgent agent = new WorkerAgent(model, new OrderTools(store), Tracer.noop());
+        WorkerAgent agent = new WorkerAgent(model, new OrderTools(store, "https://shop.test/orders"), Tracer.noop());
         controller = new A2aController(agent, WorkerCards.agentCard("http://localhost:8081"), Tracer.noop());
     }
 
@@ -92,11 +92,12 @@ class WorkerA2aE2eTest {
         assertEquals("Вот детали вашего заказа:", parts.get(0).path("text").asText());
         assertEquals("widget/order", parts.get(1).path("metadata").path("kind").asText());
         assertEquals("1041", parts.get(1).path("data").path("order").path("id").asText());
+        assertEquals("https://shop.test/orders/1041", parts.get(1).path("data").path("order").path("url").asText());
         assertFalse(parts.get(1).path("data").has("kind"), "kind must move to part metadata");
     }
 
     @Test
-    void refundPausesForConfirmationAndResumesSameTask() throws IOException {
+    void refundPausesForConfirmationThenCardThenCompletesWithReceipt() throws IOException {
         model.then(ChatModel.Completion.call(new ToolCall("c1", "initiate_refund", "{\"order_id\":\"1041\"}")));
 
         JsonNode task = invoke(sendMessageJson("верни деньги за 1041", null, null)).path("result").path("task");
@@ -111,14 +112,58 @@ class WorkerA2aE2eTest {
         // The refund must NOT have run yet.
         assertEquals("delivered", store.get("1041").orElseThrow().status());
 
-        // Resume the SAME task with the user's confirmation.
+        // "да" moves the SAME task to the card-details step — still not refunded.
+        JsonNode step2 = invoke(sendMessageJson("да", taskId, contextId)).path("result").path("task");
+        assertEquals(taskId, step2.path("id").asText());
+        assertEquals("TASK_STATE_INPUT_REQUIRED", step2.path("status").path("state").asText());
+        JsonNode askCard = step2.path("status").path("message");
+        assertTrue(askCard.path("parts").get(0).path("text").asText().contains("карт"),
+                "step 2 must ask for the card: " + askCard);
+        assertEquals("widget/refund_form", askCard.path("parts").get(1).path("metadata").path("kind").asText());
+        assertEquals("delivered", store.get("1041").orElseThrow().status());
+
+        // An invalid (Luhn-failing) card is re-asked; still not refunded.
+        JsonNode step3 = invoke(sendMessageJson("1234 5678 9012 3456", taskId, contextId)).path("result").path("task");
+        assertEquals("TASK_STATE_INPUT_REQUIRED", step3.path("status").path("state").asText());
+        assertTrue(step3.path("status").path("message").path("parts").get(0).path("text").asText()
+                .contains("некоррект"));
+        assertEquals("delivered", store.get("1041").orElseThrow().status());
+
+        // A valid (Luhn) card executes the refund: receipt widget + file part.
         model.then(ChatModel.Completion.text("Готово, возврат оформлен."));
-        JsonNode resumed = invoke(sendMessageJson("да", taskId, contextId)).path("result").path("task");
+        JsonNode resumed = invoke(sendMessageJson("4111 1111 1111 1111", taskId, contextId))
+                .path("result").path("task");
         assertEquals(taskId, resumed.path("id").asText());
         assertEquals("TASK_STATE_COMPLETED", resumed.path("status").path("state").asText());
-        assertEquals("Готово, возврат оформлен.",
-                resumed.path("artifacts").get(0).path("parts").get(0).path("text").asText());
         assertEquals("refunded", store.get("1041").orElseThrow().status());
+        JsonNode parts = resumed.path("artifacts").get(0).path("parts");
+        assertTrue(parts.get(0).path("text").asText().contains("•••• 1111"),
+                "final text must mention the masked card: " + parts.get(0));
+        assertEquals("widget/refund_receipt", parts.get(1).path("metadata").path("kind").asText());
+        assertEquals("1111", parts.get(1).path("data").path("card_last4").asText());
+        JsonNode file = parts.get(2);
+        assertEquals("receipt-1041.txt", file.path("filename").asText());
+        assertEquals("text/plain", file.path("mediaType").asText());
+        String receipt = new String(java.util.Base64.getDecoder().decode(file.path("raw").asText()),
+                java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(receipt.contains("КВИТАНЦИЯ О ВОЗВРАТЕ") && receipt.contains("•••• 1111"),
+                "receipt file content: " + receipt);
+    }
+
+    @Test
+    void cardStepWithoutDigitsCancelsRefund() throws IOException {
+        model.then(ChatModel.Completion.call(new ToolCall("c1", "initiate_refund", "{\"order_id\":\"1041\"}")));
+        JsonNode task = invoke(sendMessageJson("верни деньги за 1041", null, null)).path("result").path("task");
+        String taskId = task.path("id").asText();
+        String contextId = task.path("contextId").asText();
+
+        invoke(sendMessageJson("да", taskId, contextId));
+        JsonNode cancelled = invoke(sendMessageJson("нет, передумал", taskId, contextId))
+                .path("result").path("task");
+        assertEquals("TASK_STATE_COMPLETED", cancelled.path("status").path("state").asText());
+        assertTrue(cancelled.path("artifacts").get(0).path("parts").get(0).path("text").asText()
+                .contains("отменён"));
+        assertEquals("delivered", store.get("1041").orElseThrow().status(), "cancelled refund must not run");
     }
 
     @Test

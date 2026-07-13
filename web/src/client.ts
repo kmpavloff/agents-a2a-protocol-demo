@@ -50,10 +50,28 @@ function installFetchTap() {
   };
 }
 
-/** What one turn returns: A2UI messages to render, plus the agent's plain text. */
+/** A downloadable file the agent attached to the turn (an A2A raw part). */
+export interface FileAttachment {
+  name: string;
+  mediaType: string;
+  bytes: Uint8Array;
+}
+
+/** What one turn returns: A2UI messages, the agent's text, attached files. */
 export interface SendResult {
   a2ui: any[];
   text: string;
+  files: FileAttachment[];
+}
+
+// rawToBytes normalises an A2A raw part's payload: the SDK may surface it as
+// Uint8Array or as the wire's base64 string depending on the decode path.
+function rawToBytes(v: unknown): Uint8Array {
+  if (v instanceof Uint8Array) return v;
+  if (typeof v === 'string') {
+    return Uint8Array.from(atob(v), (ch) => ch.charCodeAt(0));
+  }
+  return new Uint8Array();
 }
 
 /**
@@ -110,13 +128,22 @@ export class A2UIClient {
     // A2A v1.0 parts are a proto oneof: `part.content = {$case, value}`.
     const artifact = task.artifacts?.[task.artifacts.length - 1];
     const a2ui: any[] = [];
+    const files: FileAttachment[] = [];
     let text = '';
     for (const p of artifact?.parts ?? []) {
       const c = (p as any).content;
       if (c?.$case === 'data') a2ui.push(c.value);
       else if (c?.$case === 'text') text += c.value;
+      else if (c?.$case === 'raw') {
+        // A downloadable file (e.g. the refund receipt).
+        files.push({
+          name: (p as any).filename || 'attachment',
+          mediaType: (p as any).mediaType || 'application/octet-stream',
+          bytes: rawToBytes(c.value),
+        });
+      }
     }
-    return {a2ui, text};
+    return {a2ui, text, files};
   }
 
   sendText(text: string): Promise<SendResult> {

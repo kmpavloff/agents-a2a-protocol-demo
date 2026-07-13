@@ -14,8 +14,11 @@ What is ported:
 - **worker (`orders-agent`)** — A2A server on `:8081`: AgentCard at
   `/.well-known/agent-card.json`, JSON-RPC `SendMessage` at `/invoke`, the five
   mock order tools, the `NEED_INPUT` clarification flow (`input-required` +
-  task resume), the human-in-the-loop refund confirmation, and widget
-  `DataPart`s (`widget/order`, `widget/order_list`, `widget/confirmation`).
+  task resume), the two-step human-in-the-loop refund (yes/no confirmation,
+  then card details validated by code with a Luhn check), the downloadable
+  refund receipt (an A2A raw/file part), and widget `DataPart`s
+  (`widget/order`, `widget/order_list`, `widget/confirmation`,
+  `widget/refund_form`, `widget/refund_receipt`).
 - **orchestrator** — terminal REPL: resolves the worker AgentCard, derives the
   `ask_orders_agent` delegating tool from it, resumes pending `input-required`
   tasks, renders widgets inline, and writes the A2A protocol trace to
@@ -72,7 +75,7 @@ the repository root so `configs/worker.yaml`, `configs/orchestrator.yaml` and
 `cp configs/*.example.yaml` setup). A different config path can be passed as
 the first argument. All the Go env overrides work too (`LLM_BASE_URL`,
 `LLM_MODEL`, `LLM_API_KEY`, `WORKER_URL`, `WORKER_LISTEN_ADDR`,
-`WORKER_PUBLIC_URL`, `WORKER_DATA_PATH`, `A2A_LOG_PATH`).
+`WORKER_PUBLIC_URL`, `WORKER_DATA_PATH`, `ORDER_LINK_BASE`, `A2A_LOG_PATH`).
 
 **Terminal 1 — worker (A2A server):**
 

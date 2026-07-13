@@ -19,7 +19,7 @@ import (
 
 func newTestRunner(t *testing.T, model *llm.Stub, store *orders.Store) *runner.Runner {
 	t.Helper()
-	ag, err := internalagent.NewWorker(model, orders.Tools(store))
+	ag, err := internalagent.NewWorker(model, orders.Tools(store, "https://shop.test/orders"))
 	if err != nil {
 		t.Fatal(err)
 	}

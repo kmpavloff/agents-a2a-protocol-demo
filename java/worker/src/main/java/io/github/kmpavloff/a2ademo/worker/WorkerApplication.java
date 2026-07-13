@@ -54,8 +54,8 @@ public class WorkerApplication {
     }
 
     @Bean
-    OrderTools orderTools(OrderStore store) {
-        return new OrderTools(store);
+    OrderTools orderTools(OrderStore store, ConfigLoader.WorkerConfig cfg) {
+        return new OrderTools(store, cfg.orderLinkBase());
     }
 
     @Bean

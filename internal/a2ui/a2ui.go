@@ -104,6 +104,58 @@ func FromWidget(w map[string]any) ([]map[string]any, bool) {
 		comps = append(comps, button("decline", "decline_lbl", "Отмена", "default", "decline_refund", ctx)...)
 		return surface(sid, comps), true
 
+	case "widget/refund_form":
+		sid := nextSurfaceID("refund_form")
+		msg, _ := w["message"].(string)
+		orderID, _ := w["order_id"].(string)
+		severity, _ := w["severity"].(string)
+		msgVariant := "body"
+		if severity == "error" {
+			msgVariant = "h3" // make a validation error stand out
+		}
+		// The card number is typed into a TextField bound to the surface data
+		// model; the submit button's context resolves {path} bindings at click
+		// time, so the value reaches the agent inside the action event.
+		ctxSubmit := map[string]any{"order_id": orderID, "card_number": map[string]any{"path": "/card_number"}}
+		ctxDecline := map[string]any{"order_id": orderID}
+		comps := []map[string]any{
+			{"id": "root", "component": "Column", "children": []any{"title", "msg", "card", "actions"}},
+			text("title", title, "h3"),
+			text("msg", msg, msgVariant),
+			{"id": "card", "component": "TextField", "label": "Номер карты",
+				"value": map[string]any{"path": "/card_number"}, "variant": "shortText"},
+			{"id": "actions", "component": "Row", "children": []any{"submit", "decline"}},
+		}
+		comps = append(comps, button("submit", "submit_lbl", "Вернуть на карту", "primary", "submit_refund_details", ctxSubmit)...)
+		comps = append(comps, button("decline", "decline_lbl", "Отмена", "default", "decline_refund", ctxDecline)...)
+		return surface(sid, comps), true
+
+	case "widget/refund_receipt":
+		sid := nextSurfaceID("refund_receipt")
+		children := []any{"title"}
+		comps := []map[string]any{
+			{"id": "root", "component": "Column", "children": children},
+			text("title", title, "h3"),
+		}
+		add := func(id, line string) {
+			children = append(children, id)
+			comps = append(comps, text(id, line, "body"))
+		}
+		if v, ok := w["receipt_id"]; ok {
+			add("rid", fmt.Sprintf("Квитанция №: %v", v))
+		}
+		add("order", fmt.Sprintf("Заказ: #%v — %v", w["order_id"], w["item"]))
+		add("amount", fmt.Sprintf("Сумма возврата: %v %v", w["amount"], w["currency"]))
+		if v, _ := w["card_last4"].(string); v != "" {
+			add("card", fmt.Sprintf("Карта получателя: •••• %s", v))
+		}
+		if v, ok := w["created"]; ok {
+			add("created", fmt.Sprintf("Дата: %v", v))
+		}
+		add("note", "Файл квитанции можно скачать ниже.")
+		comps[0]["children"] = children
+		return surface(sid, comps), true
+
 	case "widget/order":
 		sid := nextSurfaceID("order")
 		o, _ := w["order"].(map[string]any)
@@ -126,6 +178,12 @@ func FromWidget(w map[string]any) ([]map[string]any, bool) {
 		}
 		add("customer", "Клиент:", "customer")
 		add("created", "Дата:", "created")
+		// Text renders markdown in the browser, so the order-card link is a
+		// plain markdown link. The URL comes from the widget (built by code).
+		if url, _ := o["url"].(string); url != "" {
+			children = append(children, "link")
+			comps = append(comps, text("link", fmt.Sprintf("[Открыть карточку заказа →](%s)", url), "body"))
+		}
 		comps[0]["children"] = children // refresh root Column children after appends
 		return surface(sid, comps), true
 
@@ -144,8 +202,14 @@ func FromWidget(w map[string]any) ([]map[string]any, bool) {
 			}
 			id := fmt.Sprintf("row%d", i)
 			children = append(children, id)
-			line := fmt.Sprintf("#%v  %v — %v (%v %v, %v)",
-				o["id"], o["item"], o["status_label"], o["amount"], o["currency"], o["created"])
+			// The order number becomes a markdown link when the widget carries
+			// a per-row url, so each row opens its order card.
+			num := fmt.Sprintf("#%v", o["id"])
+			if url, _ := o["url"].(string); url != "" {
+				num = fmt.Sprintf("[%s](%s)", num, url)
+			}
+			line := fmt.Sprintf("%s  %v — %v (%v %v, %v)",
+				num, o["item"], o["status_label"], o["amount"], o["currency"], o["created"])
 			comps = append(comps, text(id, line, "body"))
 		}
 		comps[0]["children"] = children

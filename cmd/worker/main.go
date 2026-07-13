@@ -28,7 +28,7 @@ func main() {
 	model := llm.New(cfg.LLM)
 	log.Printf("orders-agent | LLM=%s model=%q | data=%s | listen=%s",
 		cfg.LLM.BaseURL, cfg.LLM.Model, cfg.DataPath, cfg.ListenAddr)
-	tools := orders.Tools(store)
+	tools := orders.Tools(store, cfg.OrderLinkBase)
 	log.Printf("orders-agent tools (%d):", len(tools))
 	for _, t := range tools {
 		log.Printf("  - %s: %s", t.Name(), t.Description())

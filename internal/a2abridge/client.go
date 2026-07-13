@@ -33,11 +33,20 @@ type OrdersClient struct {
 	// DataParts, tagged with the orchestrator session id (= A2A contextID) so a
 	// multi-session server can route each widget to the right request.
 	onWidget func(sessionID string, w map[string]any)
+	// onFile, if set, receives downloadable files (raw parts with a filename)
+	// the worker attaches to artifacts — e.g. the refund receipt.
+	onFile func(sessionID, filename, mediaType string, data []byte)
 }
 
 // SetWidgetHandler registers a callback for widgets (DataParts) the worker
 // emits. The handler runs on the goroutine that invokes the delegating tool.
 func (c *OrdersClient) SetWidgetHandler(fn func(sessionID string, w map[string]any)) { c.onWidget = fn }
+
+// SetFileHandler registers a callback for downloadable files (raw parts) the
+// worker attaches to artifacts. Runs on the delegating tool's goroutine.
+func (c *OrdersClient) SetFileHandler(fn func(sessionID, filename, mediaType string, data []byte)) {
+	c.onFile = fn
+}
 
 // NewOrdersClient resolves the worker AgentCard at workerURL and creates an
 // A2A client from it. trace may be nil to disable protocol tracing.
@@ -127,6 +136,7 @@ func (c *OrdersClient) ask(ctx context.Context, sessionID, text string) (string,
 		// Completed (or failed/canceled) — clear any pending state.
 		c.clearPending(sessionID)
 		c.forwardWidget(sessionID, artifactParts(r)) // e.g. order / order-list widget
+		c.forwardFiles(sessionID, artifactParts(r))  // e.g. the refund receipt
 		result := taskResultText(r)
 		c.trace.Logf("    ✔ terminal state, cleared pending | result=%q", result)
 		return result, nil
@@ -233,6 +243,23 @@ func (c *OrdersClient) forwardWidget(sessionID string, parts []*a2a.Part) {
 	if w := firstWidget(parts); w != nil {
 		c.trace.Logf("    ⟐ widget DataPart (%v) → UI, bypassing LLM", w["_kind"])
 		c.onWidget(sessionID, w)
+	}
+}
+
+// forwardFiles sends every downloadable raw part (with a filename) among parts
+// to the registered file handler, tagged with sessionID.
+func (c *OrdersClient) forwardFiles(sessionID string, parts []*a2a.Part) {
+	if c.onFile == nil {
+		return
+	}
+	for _, p := range parts {
+		if p == nil || p.Filename == "" {
+			continue
+		}
+		if data := p.Raw(); len(data) > 0 {
+			c.trace.Logf("    ⟐ file part %q (%s, %d bytes) → UI", p.Filename, p.MediaType, len(data))
+			c.onFile(sessionID, p.Filename, p.MediaType, data)
+		}
 	}
 }
 

@@ -173,8 +173,9 @@ func mustTool(t tool.Tool, err error) tool.Tool {
 	return t
 }
 
-// Tools returns the order tools bound to the given store.
-func Tools(s *Store) []tool.Tool {
+// Tools returns the order tools bound to the given store. orderLinkBase is the
+// base URL for customer-facing order-card links in widgets ("" disables links).
+func Tools(s *Store, orderLinkBase string) []tool.Tool {
 	return []tool.Tool{
 		mustTool(functiontool.New(functiontool.Config{Name: "find_order", Description: "Найти заказ по номеру или тексту названия товара."},
 			func(_ tool.Context, a queryArgs) (string, error) { return findOrder(s, a.Query) })),
@@ -183,7 +184,7 @@ func Tools(s *Store) []tool.Tool {
 				text, err := getOrderStatus(s, a.orderID())
 				if err == nil {
 					if o, ok := s.Get(a.orderID()); ok {
-						stashWidget(tc, orderWidget(o))
+						stashWidget(tc, orderWidget(o, OrderURL(orderLinkBase, o.ID)))
 					}
 				}
 				return text, err
@@ -193,7 +194,7 @@ func Tools(s *Store) []tool.Tool {
 				text, err := listRecentOrders(s, a.customer())
 				if err == nil {
 					if list := s.ByCustomer(a.customer()); len(list) > 0 {
-						stashWidget(tc, orderListWidget(a.customer(), list))
+						stashWidget(tc, orderListWidget(a.customer(), list, orderLinkBase))
 					}
 				}
 				return text, err
@@ -205,6 +206,16 @@ func Tools(s *Store) []tool.Tool {
 			Description:                 "Оформить возврат по заказу (по его номеру).",
 			RequireConfirmationProvider: refundNeedsConfirmation,
 		},
-			func(_ tool.Context, a idArgs) (string, error) { return initiateRefund(s, a.orderID()) })),
+			func(tc tool.Context, a idArgs) (string, error) {
+				text, err := initiateRefund(s, a.orderID())
+				if err == nil {
+					// A successful refund leaves the order in "refunded" —
+					// stash the receipt widget for the A2A layer to enrich.
+					if o, ok := s.Get(strings.TrimSpace(a.orderID())); ok && o.Status == "refunded" {
+						stashWidget(tc, refundReceiptWidget(o))
+					}
+				}
+				return text, err
+			})),
 	}
 }

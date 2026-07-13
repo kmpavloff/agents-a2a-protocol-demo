@@ -18,9 +18,12 @@ public class OrderTools {
     private static final String[] CUSTOMER_KEYS = {"customer", "customer_name", "name", "client"};
 
     private final OrderStore store;
+    private final String orderLinkBase;
 
-    public OrderTools(OrderStore store) {
+    /** orderLinkBase is the order-card base URL for widget links ("" disables links). */
+    public OrderTools(OrderStore store, String orderLinkBase) {
         this.store = store;
+        this.orderLinkBase = orderLinkBase == null ? "" : orderLinkBase;
     }
 
     /** A tool's text result plus an optional structured widget for the UI. */
@@ -50,7 +53,7 @@ public class OrderTools {
             case "get_order_status" -> getOrderStatus(call.firstArg(ORDER_ID_KEYS));
             case "list_recent_orders" -> listRecentOrders(call.firstArg(CUSTOMER_KEYS));
             case "get_sales_stats" -> ToolResult.text(getSalesStats(call.firstArg("period")));
-            case "initiate_refund" -> ToolResult.text(initiateRefund(call.firstArg(ORDER_ID_KEYS)));
+            case "initiate_refund" -> initiateRefund(call.firstArg(ORDER_ID_KEYS));
             default -> ToolResult.text("Неизвестный инструмент: " + call.name());
         };
     }
@@ -63,7 +66,7 @@ public class OrderTools {
                 .map(o -> new ToolResult(
                         String.format(Locale.ROOT, "Заказ %s (%s): статус — %s. Сумма: %.2f %s.",
                                 o.id(), o.item(), Widgets.statusLabel(o.status()), o.amount(), o.currency()),
-                        Widgets.orderWidget(o)))
+                        Widgets.orderWidget(o, Widgets.orderUrl(orderLinkBase, o.id()))))
                 .orElseGet(() -> ToolResult.text(String.format("Заказ %s не найден.", id)));
     }
 
@@ -81,7 +84,7 @@ public class OrderTools {
             b.append(String.format(Locale.ROOT, "- #%s %s (%s, %.2f %s, %s)%n",
                     o.id(), o.item(), Widgets.statusLabel(o.status()), o.amount(), o.currency(), o.created()));
         }
-        return new ToolResult(b.toString(), Widgets.orderListWidget(customer, list));
+        return new ToolResult(b.toString(), Widgets.orderListWidget(customer, list, orderLinkBase));
     }
 
     String getSalesStats(String period) {
@@ -91,17 +94,21 @@ public class OrderTools {
                 .orElse(String.format("Нет статистики продаж за период \"%s\".", period));
     }
 
-    String initiateRefund(String id) {
+    ToolResult initiateRefund(String id) {
         if (id.isEmpty()) {
-            return "Не указан номер заказа. Передайте order_id (например, 1041) и вызовите инструмент снова.";
+            return ToolResult.text("Не указан номер заказа. Передайте order_id (например, 1041) и вызовите инструмент снова.");
         }
         try {
             Order o = store.refund(id);
-            return String.format(Locale.ROOT, "Возврат по заказу %s оформлен (%.2f %s).", o.id(), o.amount(), o.currency());
+            // A successful refund ships the receipt widget for the agent
+            // layer to enrich with the payment context.
+            return new ToolResult(
+                    String.format(Locale.ROOT, "Возврат по заказу %s оформлен (%.2f %s).", o.id(), o.amount(), o.currency()),
+                    Widgets.refundReceiptWidget(o));
         } catch (OrderStore.NotFoundException e) {
-            return String.format("Невозможно оформить возврат: заказ %s не найден.", id);
+            return ToolResult.text(String.format("Невозможно оформить возврат: заказ %s не найден.", id));
         } catch (OrderStore.NotRefundableException e) {
-            return String.format("Невозможно оформить возврат: заказ %s не подлежит возврату.", id);
+            return ToolResult.text(String.format("Невозможно оформить возврат: заказ %s не подлежит возврату.", id));
         }
     }
 

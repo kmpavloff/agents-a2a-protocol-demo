@@ -69,7 +69,8 @@ func e2eStore(t *testing.T) *orders.Store {
 func TestEndToEndRefundConfirmed(t *testing.T) {
 	store := e2eStore(t)
 	// Turn 1: LLM calls initiate_refund → adk requests confirmation.
-	// Turn 2 (after "да"): adk executes the refund → LLM summarizes.
+	// Turn 2 ("да") → the worker asks for the card, still input-required.
+	// Turn 3 (invalid card) → re-asked. Turn 4 (valid card) → refund runs.
 	model := llm.NewStub(
 		llm.StubTurn{Call: &genai.FunctionCall{Name: "initiate_refund", Args: map[string]any{"order_id": "1041"}}},
 		llm.StubTurn{Text: "Возврат по заказу 1041 оформлен."},
@@ -95,12 +96,37 @@ func TestEndToEndRefundConfirmed(t *testing.T) {
 		t.Fatalf("order 1041 must be present and NOT yet refunded before confirmation; ok=%v status=%q", ok, o.Status)
 	}
 
+	// "да" moves the SAME task to the card-details step — still not refunded.
 	r2, err := oc.ask(context.Background(), sess, "да")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(r2, "оформлен") {
-		t.Fatalf("turn 2 should complete the refund, got %q", r2)
+	if !strings.HasPrefix(r2, "NEEDS_USER_INPUT:") || !strings.Contains(r2, "карт") {
+		t.Fatalf("turn 2 should ask for the card number, got %q", r2)
+	}
+	if o, _ := store.Get("1041"); o.Status == "refunded" {
+		t.Fatal("refund must not run before card details are provided")
+	}
+
+	// An invalid (Luhn-failing) card is re-asked; still not refunded.
+	r3, err := oc.ask(context.Background(), sess, "1234 5678 9012 3456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(r3, "NEEDS_USER_INPUT:") || !strings.Contains(r3, "некоррект") {
+		t.Fatalf("invalid card should be re-asked, got %q", r3)
+	}
+	if o, _ := store.Get("1041"); o.Status == "refunded" {
+		t.Fatal("refund must not run on an invalid card")
+	}
+
+	// A valid (Luhn) card executes the refund; the reply mentions the last4.
+	r4, err := oc.ask(context.Background(), sess, "4111 1111 1111 1111")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(r4, "оформлен") || !strings.Contains(r4, "1111") {
+		t.Fatalf("turn 4 should complete the refund mentioning the masked card, got %q", r4)
 	}
 	o, ok := store.Get("1041")
 	if !ok {
@@ -108,6 +134,37 @@ func TestEndToEndRefundConfirmed(t *testing.T) {
 	}
 	if o.Status != "refunded" {
 		t.Errorf("store should show order 1041 refunded, got status %q", o.Status)
+	}
+}
+
+// TestEndToEndRefundCardStepCancel: a digit-less reply at the card step cancels
+// the refund instead of guessing.
+func TestEndToEndRefundCardStepCancel(t *testing.T) {
+	store := e2eStore(t)
+	model := llm.NewStub(
+		llm.StubTurn{Call: &genai.FunctionCall{Name: "initiate_refund", Args: map[string]any{"order_id": "1041"}}},
+	)
+	url := startWorkerWithTools(t, model, store)
+	oc, err := NewOrdersClient(context.Background(), url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := "card-cancel"
+	if _, err := oc.ask(context.Background(), sess, "оформи возврат по заказу 1041"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := oc.ask(context.Background(), sess, "да"); err != nil {
+		t.Fatal(err)
+	}
+	r, err := oc.ask(context.Background(), sess, "передумал, не надо")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(r, "отменён") {
+		t.Fatalf("digit-less reply at card step should cancel, got %q", r)
+	}
+	if o, _ := store.Get("1041"); o.Status == "refunded" {
+		t.Error("cancelled refund must not run")
 	}
 }
 
