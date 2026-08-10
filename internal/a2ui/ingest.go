@@ -1,0 +1,311 @@
+package a2ui
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+)
+
+// Part — минимальный вид A2A-части, нужный Ingest. Пакет a2ui намеренно не
+// импортирует a2a: транспорт остаётся снаружи, здесь живёт только знание о
+// формате A2UI.
+type Part struct {
+	MediaType string
+	Text      string
+	Data      any
+}
+
+// knownMessages — сообщения A2UI, которые понимает наш рендерер. Всё остальное
+// отбрасывается, чтобы не смущать процессор на стороне браузера.
+var knownMessages = []string{"createSurface", "updateComponents", "updateDataModel", "deleteSurface"}
+
+// basicComponents — 18 компонентов basic-каталога v0.9. Ingest обязан выдавать
+// только их: объявленный агентами каталог именно этот, и наш рендерер отвергает
+// всё, чего в нём нет.
+var basicComponents = map[string]bool{
+	"Text": true, "Image": true, "Icon": true, "Video": true, "AudioPlayer": true,
+	"Row": true, "Column": true, "List": true, "Card": true, "Tabs": true,
+	"Modal": true, "Divider": true, "Button": true, "TextField": true,
+	"CheckBox": true, "ChoicePicker": true, "Slider": true, "DateTimeInput": true,
+}
+
+// Ingest достаёт A2UI-сообщения из частей ответа удалённого агента и приводит
+// их к форме, которую понимает наш рендерер: плоские компоненты basic-каталога
+// v0.9.
+//
+// Толерантен по входу, потому что живой агент отдаёт не то, что обещает его
+// контракт: A2UI приезжает и как DataPart с массивом сообщений, и как одиночный
+// объект, и как ТЕКСТОВАЯ часть с mediaType application/a2ui+json, внутри
+// которой JSON-строка. Компоненты приезжают и плоскими, и обёрнутыми
+// ({"Text": {...}}), и типов, которых нет в объявленном самим агентом каталоге.
+//
+// Инвариант: Ingest никогда не паникует и не возвращает ошибку. Худший исход —
+// блёклый, но валидный набор компонентов: чужой агент не должен ронять наш UI.
+func Ingest(parts []Part) []map[string]any {
+	var out []map[string]any
+	gen := 0 // счётчик id для компонентов, приехавших без него
+	for _, p := range parts {
+		if p.MediaType != MIMEType {
+			continue
+		}
+		for _, raw := range messagesFrom(p) {
+			if m, ok := normalizeMessage(raw, &gen); ok {
+				out = append(out, m)
+			}
+		}
+	}
+	return out
+}
+
+// messagesFrom разбирает полезную нагрузку части в список сырых A2UI-сообщений,
+// принимая все три встреченные раскладки.
+func messagesFrom(p Part) []map[string]any {
+	payload := p.Data
+	if payload == nil {
+		if strings.TrimSpace(p.Text) == "" {
+			return nil
+		}
+		if err := json.Unmarshal([]byte(p.Text), &payload); err != nil {
+			return nil
+		}
+	}
+	switch v := payload.(type) {
+	case []any:
+		var msgs []map[string]any
+		for _, item := range v {
+			if m, ok := item.(map[string]any); ok {
+				msgs = append(msgs, m)
+			}
+		}
+		return msgs
+	case []map[string]any:
+		return v
+	case map[string]any:
+		return []map[string]any{v}
+	}
+	return nil
+}
+
+// normalizeMessage переписывает версию сообщения на нашу и нормализует
+// компоненты. Возвращает ok=false для сообщений неизвестного вида.
+func normalizeMessage(msg map[string]any, gen *int) (map[string]any, bool) {
+	kind := ""
+	for _, k := range knownMessages {
+		if _, ok := msg[k]; ok {
+			kind = k
+			break
+		}
+	}
+	if kind == "" {
+		return nil, false
+	}
+	out := make(map[string]any, len(msg))
+	for k, v := range msg {
+		out[k] = v
+	}
+	out["version"] = Version
+
+	if kind != "updateComponents" {
+		return out, true
+	}
+	payload, ok := msg["updateComponents"].(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	raw := componentList(payload["components"])
+	if len(raw) == 0 {
+		return nil, false
+	}
+	comps := make([]map[string]any, 0, len(raw))
+	for _, c := range raw {
+		comps = append(comps, normalizeComponent(c, gen)...)
+	}
+	if len(comps) == 0 {
+		return nil, false
+	}
+	next := make(map[string]any, len(payload))
+	for k, v := range payload {
+		next[k] = v
+	}
+	next["components"] = comps
+	out["updateComponents"] = next
+	return out, true
+}
+
+// componentList приводит поле components к списку объектов, переживая и
+// []any, и уже типизированный []map[string]any.
+func componentList(v any) []map[string]any {
+	switch list := v.(type) {
+	case []map[string]any:
+		return list
+	case []any:
+		out := make([]map[string]any, 0, len(list))
+		for _, item := range list {
+			if m, ok := item.(map[string]any); ok {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// unwrap разбирает обёрнутую форму компонента ({"Text": {...}}), которую шлёт
+// внешний агент, в пару «тип, свойства». Плоская форма возвращается как есть.
+func unwrap(c map[string]any) (string, map[string]any) {
+	if t, ok := c["component"].(string); ok && t != "" {
+		props := make(map[string]any, len(c))
+		for k, v := range c {
+			if k != "component" {
+				props[k] = v
+			}
+		}
+		return t, props
+	}
+	if len(c) == 1 {
+		for name, v := range c {
+			if props, ok := v.(map[string]any); ok {
+				return name, props
+			}
+		}
+	}
+	return "", nil
+}
+
+// normalizeComponent превращает один входящий компонент в один или несколько
+// компонентов basic-каталога. Id контейнера всегда сохраняется: на него
+// ссылается children родителя, и потеря id разорвала бы дерево.
+func normalizeComponent(c map[string]any, gen *int) []map[string]any {
+	typ, props := unwrap(c)
+	if typ == "" {
+		return nil
+	}
+	id, _ := props["id"].(string)
+	if id == "" {
+		*gen++
+		id = fmt.Sprintf("gen%d", *gen)
+	}
+	delete(props, "id")
+
+	switch typ {
+	case "Button":
+		return normalizeButton(id, props)
+	case "Heading":
+		txt, _ := props["text"].(string)
+		return []map[string]any{text(id, txt, "h3")}
+	case "Metric":
+		label, _ := props["label"].(string)
+		value := fmt.Sprintf("%v", props["value"])
+		line := value
+		if label != "" {
+			line = "**" + label + ":** " + value
+		}
+		return []map[string]any{text(id, line, "body")}
+	case "Callout":
+		return normalizeCallout(id, props)
+	case "Table":
+		return []map[string]any{text(id, markdownTable(props), "body")}
+	}
+
+	if !basicComponents[typ] {
+		// Незнакомый компонент лучше показать дампом, чем потерять молча.
+		return []map[string]any{text(id, unknownDump(typ, props), "body")}
+	}
+	out := map[string]any{"id": id, "component": typ}
+	for k, v := range props {
+		out[k] = v
+	}
+	return []map[string]any{out}
+}
+
+// normalizeButton приводит кнопку к форме каталога: у него нет свойства label,
+// подпись живёт отдельным дочерним Text.
+func normalizeButton(id string, props map[string]any) []map[string]any {
+	btn := map[string]any{"id": id, "component": "Button"}
+	for k, v := range props {
+		if k == "label" {
+			continue
+		}
+		btn[k] = v
+	}
+	if _, hasChild := btn["child"]; hasChild {
+		return []map[string]any{btn}
+	}
+	label, _ := props["label"].(string)
+	if label == "" {
+		label = "OK"
+	}
+	labelID := id + "__lbl"
+	btn["child"] = labelID
+	return []map[string]any{btn, text(labelID, label, "body")}
+}
+
+// normalizeCallout разворачивает плашку в колонку из заголовка и текста,
+// сохраняя id самой плашки за колонкой.
+func normalizeCallout(id string, props map[string]any) []map[string]any {
+	titleID, bodyID := id+"__t", id+"__b"
+	title, _ := props["title"].(string)
+	body, _ := props["text"].(string)
+	children := []any{}
+	comps := []map[string]any{nil} // место под колонку
+	if title != "" {
+		children = append(children, titleID)
+		comps = append(comps, text(titleID, title, "h3"))
+	}
+	if body != "" {
+		children = append(children, bodyID)
+		comps = append(comps, text(bodyID, body, "body"))
+	}
+	if len(children) == 0 {
+		return []map[string]any{text(id, "", "body")}
+	}
+	comps[0] = map[string]any{"id": id, "component": "Column", "children": children}
+	return comps
+}
+
+// markdownTable рисует таблицу разметкой: Text в браузере рендерится через
+// markdown-it, поэтому она станет настоящей <table>.
+func markdownTable(props map[string]any) string {
+	cols := componentList(props["columns"])
+	rows := componentList(props["rows"])
+	if len(cols) == 0 {
+		return unknownDump("Table", props)
+	}
+	var b strings.Builder
+	keys := make([]string, 0, len(cols))
+	b.WriteString("|")
+	for _, c := range cols {
+		key, _ := c["key"].(string)
+		label, _ := c["label"].(string)
+		if label == "" {
+			label = key
+		}
+		keys = append(keys, key)
+		fmt.Fprintf(&b, " %s |", label)
+	}
+	b.WriteString("\n|")
+	for range keys {
+		b.WriteString(" --- |")
+	}
+	for _, r := range rows {
+		b.WriteString("\n|")
+		for _, k := range keys {
+			v, ok := r[k]
+			if !ok || v == nil {
+				v = ""
+			}
+			fmt.Fprintf(&b, " %v |", v)
+		}
+	}
+	return b.String()
+}
+
+// unknownDump компактно показывает то, что мы не умеем отрисовать, вместо того
+// чтобы выбросить компонент.
+func unknownDump(typ string, props map[string]any) string {
+	raw, err := json.Marshal(props)
+	if err != nil {
+		return typ
+	}
+	return "`" + typ + "` " + string(raw)
+}
