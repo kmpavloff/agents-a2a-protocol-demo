@@ -1,0 +1,26 @@
+{
+  "jsonrpc": "2.0",
+  "id": "t1",
+  "result": {
+    "id": "d5c2dfb204cf4f5b8de87ed906284b78",
+    "contextId": "d5c2dfb204cf4f5b8de87ed906284b78",
+    "status": {
+      "state": "TASK_STATE_COMPLETED"
+    },
+    "artifacts": [
+      {
+        "artifactId": "c64194a1f3a54e6a8d297993531b3b58",
+        "parts": [
+          {
+            "text": "\u0417\u0430\u043a\u0430\u0437 **ORD-001** \u2014 \u0434\u043e\u0441\u0442\u0430\u0432\u043b\u0435\u043d. \u0412\u043e\u0442 \u043f\u043e\u043b\u043d\u0430\u044f \u043a\u0430\u0440\u0442\u0438\u043d\u0430:\n\n**\u041a\u043b\u0438\u0435\u043d\u0442:** \u0418\u0432\u0430\u043d \u041f\u0435\u0442\u0440\u043e\u0432 (ivan.petrov@example.com)\n**\u0421\u0442\u0430\u0442\u0443\u0441:** \u2705 \u0414\u043e\u0441\u0442\u0430\u0432\u043b\u0435\u043d 20 \u0438\u044e\u043b\u044f 2026\n**\u0422\u0440\u0435\u043a-\u043d\u043e\u043c\u0435\u0440:** RU123456789\n\n| \u0410\u0440\u0442\u0438\u043a\u0443\u043b | \u0422\u043e\u0432\u0430\u0440 | \u041a\u043e\u043b-\u0432\u043e | \u0426\u0435\u043d\u0430 |\n|---------|-------|--------|------|\n| WIDGET-RED | \u041a\u0440\u0430\u0441\u043d\u044b\u0439 \u0432\u0438\u0434\u0436\u0435\u0442 | 2 | 1 500 \u20bd |\n| CABLE-USB-C | USB-C \u043a\u0430\u0431\u0435\u043b\u044c | 1 | 499 \u20bd |\n\n**\u0418\u0442\u043e\u0433\u043e:** 3 499 \u20bd\n**\u0410\u0434\u0440\u0435\u0441 \u0434\u043e\u0441\u0442\u0430\u0432\u043a\u0438:** \u0433. \u041c\u043e\u0441\u043a\u0432\u0430, \u0443\u043b. \u0422\u0432\u0435\u0440\u0441\u043a\u0430\u044f, \u0434. 10, \u043a\u0432. 25",
+            "mediaType": "text/plain"
+          },
+          {
+            "text": "[{\"version\": \"v0.9.1\", \"createSurface\": {\"surfaceId\": \"surface_d5c2dfb2\", \"catalogId\": \"https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json\"}}, {\"version\": \"v0.9.1\", \"updateComponents\": {\"surfaceId\": \"surface_d5c2dfb2\", \"components\": [{\"Column\": {\"id\": \"order_card\", \"children\": [\"title\", \"status_callout\", \"metrics_row\", \"items_table\", \"total_metric\", \"tracking_row\"]}}, {\"Heading\": {\"id\": \"title\", \"text\": \"\\u0417\\u0430\\u043a\\u0430\\u0437 ORD-001\", \"level\": 2}}, {\"Callout\": {\"id\": \"status_callout\", \"variant\": \"success\", \"title\": \"\\u0414\\u043e\\u0441\\u0442\\u0430\\u0432\\u043b\\u0435\\u043d\", \"text\": \"\\u0418\\u0432\\u0430\\u043d \\u041f\\u0435\\u0442\\u0440\\u043e\\u0432 \\u2014 3 499 \\u20bd\"}}, {\"Row\": {\"id\": \"metrics_row\", \"children\": [\"metric_items\", \"metric_date\"]}}, {\"Metric\": {\"id\": \"metric_items\", \"label\": \"\\u041f\\u043e\\u0437\\u0438\\u0446\\u0438\\u0439\", \"value\": \"3\"}}, {\"Metric\": {\"id\": \"metric_date\", \"label\": \"\\u0414\\u043e\\u0441\\u0442\\u0430\\u0432\\u043b\\u0435\\u043d\", \"value\": \"20.07.2026\", \"trend\": \"flat\"}}, {\"Table\": {\"id\": \"items_table\", \"columns\": [{\"key\": \"sku\", \"label\": \"\\u0410\\u0440\\u0442\\u0438\\u043a\\u0443\\u043b\"}, {\"key\": \"name\", \"label\": \"\\u0422\\u043e\\u0432\\u0430\\u0440\"}, {\"key\": \"quantity\", \"label\": \"\\u041a\\u043e\\u043b-\\u0432\\u043e\"}, {\"key\": \"price\", \"label\": \"\\u0426\\u0435\\u043d\\u0430\"}], \"rows\": [{\"sku\": \"WIDGET-RED\", \"name\": \"\\u041a\\u0440\\u0430\\u0441\\u043d\\u044b\\u0439 \\u0432\\u0438\\u0434\\u0436\\u0435\\u0442\", \"quantity\": 2, \"price\": \"1 500 \\u20bd\"}, {\"sku\": \"CABLE-USB-C\", \"name\": \"USB-C \\u043a\\u0430\\u0431\\u0435\\u043b\\u044c\", \"quantity\": 1, \"price\": \"499 \\u20bd\"}]}}, {\"Metric\": {\"id\": \"total_metric\", \"label\": \"\\u0418\\u0442\\u043e\\u0433\\u043e\", \"value\": \"3 499 \\u20bd\", \"trend\": \"flat\"}}, {\"Row\": {\"id\": \"tracking_row\", \"children\": [\"tracking_label\", \"tracking_button\"]}}, {\"Text\": {\"id\": \"tracking_label\", \"text\": \"\\u0422\\u0440\\u0435\\u043a: **RU123456789**\"}}, {\"Button\": {\"id\": \"tracking_button\", \"label\": \"\\u041e\\u0442\\u0441\\u043b\\u0435\\u0434\\u0438\\u0442\\u044c\", \"variant\": \"secondary\"}}], \"dataModel\": {\"context_id\": \"d5c2dfb204cf4f5b8de87ed906284b78\"}}}]",
+            "mediaType": "application/a2ui+json"
+          }
+        ]
+      }
+    ]
+  }
+}
