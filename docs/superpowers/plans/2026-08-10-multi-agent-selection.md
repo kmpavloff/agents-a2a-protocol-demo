@@ -47,7 +47,7 @@
 **Interfaces:**
 - Produces: `config.AgentConfig{ID, Name, URL, CardPath, Skill, Verbatim, Timeout, Description, Auth}`, `config.AuthConfig{Type, Username, Password}`, `OrchestratorConfig.Agents []AgentConfig`, `(AgentConfig).TimeoutDuration() time.Duration`.
 
-- [ ] **Step 1: Написать падающие тесты**
+- [x] **Step 1: Написать падающие тесты**
 
 ```go
 func TestLoadOrchestratorParsesAgents(t *testing.T) {
@@ -140,12 +140,12 @@ func TestLoadOrchestratorRejectsBadAgents(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Убедиться, что тесты падают**
+- [x] **Step 2: Убедиться, что тесты падают**
 
 Run: `go test ./internal/config/ -run TestLoadOrchestrator -v`
 Expected: FAIL — `cfg.Agents undefined`.
 
-- [ ] **Step 3: Реализовать**
+- [x] **Step 3: Реализовать**
 
 ```go
 // AuthConfig описывает, как аутентифицироваться у удалённого агента.
@@ -252,12 +252,12 @@ func applyAgentDefaults(agents []AgentConfig) error {
 
 Старую проверку `if c.WorkerURL == ""` — удалить (её заменяет проверка выше).
 
-- [ ] **Step 4: Прогнать тесты**
+- [x] **Step 4: Прогнать тесты**
 
 Run: `go test ./internal/config/ -v`
 Expected: PASS.
 
-- [ ] **Step 5: Коммит**
+- [x] **Step 5: Коммит**
 
 ```bash
 git add internal/config/
@@ -277,7 +277,7 @@ git commit -m "feat(config): список удалённых агентов вм
 - Produces: `a2ui.Part{MediaType, Text string, Data any}`, `a2ui.Ingest(parts []Part) []map[string]any`.
 - Пакет `a2ui` остаётся транспортно-независимым: он НЕ импортирует `a2a`. Конвертацию `a2a.Part → a2ui.Part` делает `a2abridge`.
 
-- [ ] **Step 1: Написать падающие тесты**
+- [x] **Step 1: Написать падающие тесты**
 
 ```go
 // basicCatalog — 18 компонентов basic-каталога v0.9. Ingest обязан выдавать
@@ -435,12 +435,12 @@ func TestIngestIgnoresGarbage(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Убедиться, что тесты падают**
+- [x] **Step 2: Убедиться, что тесты падают**
 
 Run: `go test ./internal/a2ui/ -run TestIngest -v`
 Expected: FAIL — `undefined: Ingest`.
 
-- [ ] **Step 3: Реализовать `internal/a2ui/ingest.go`**
+- [x] **Step 3: Реализовать `internal/a2ui/ingest.go`**
 
 Ключевые правила (полный код пишется по ним):
 
@@ -488,12 +488,12 @@ func Ingest(parts []Part) []map[string]any
 - Сообщения не из белого списка (`createSurface`, `updateComponents`, `updateDataModel`, `deleteSurface`) отбрасываются.
 - `components` на выходе — всегда `[]map[string]any`.
 
-- [ ] **Step 4: Прогнать тесты**
+- [x] **Step 4: Прогнать тесты**
 
 Run: `go test ./internal/a2ui/ -v`
 Expected: PASS (все, включая существующие).
 
-- [ ] **Step 5: Коммит**
+- [x] **Step 5: Коммит**
 
 ```bash
 git add internal/a2ui/
@@ -532,7 +532,7 @@ func (r *Remote) Ask(ctx context.Context, sessionID, text string) (Reply, error)
 func (r *Remote) PendingTaskID(sessionID string) a2a.TaskID
 ```
 
-- [ ] **Step 1: Написать падающие тесты**
+- [x] **Step 1: Написать падающие тесты**
 
 ```go
 // ouroborosStub — HTTP-сервер, отвечающий ровно как внешний агент: карточка по
@@ -695,12 +695,12 @@ func TestRemoteProfileUsesConfigDescription(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Убедиться, что тесты падают**
+- [x] **Step 2: Убедиться, что тесты падают**
 
 Run: `go test ./internal/a2abridge/ -run TestRemote -v`
 Expected: FAIL — `undefined: NewRemote`.
 
-- [ ] **Step 3: Реализовать `remote.go`**
+- [x] **Step 3: Реализовать `remote.go`**
 
 Опорные точки:
 
@@ -736,12 +736,12 @@ func (t *basicAuthTransport) RoundTrip(req *http.Request) (*http.Response, error
 
 `toolIdent` — уже существующий подход: `nonAlnum.ReplaceAllString(id, "_")`.
 
-- [ ] **Step 4: Прогнать тесты**
+- [x] **Step 4: Прогнать тесты**
 
 Run: `go test ./internal/a2abridge/ -v`
 Expected: PASS (включая все существующие тесты пакета).
 
-- [ ] **Step 5: Коммит**
+- [x] **Step 5: Коммит**
 
 ```bash
 git add internal/a2abridge/remote.go internal/a2abridge/remote_test.go
@@ -760,7 +760,7 @@ git commit -m "feat(a2abridge): Remote — соединение с произв�
 - Consumes: `Remote`, `Reply`.
 - Produces: `NewOrdersClientFromRemote(r *Remote) *OrdersClient`; `(*OrdersClient).SetA2UIHandler(fn func(sessionID string, msgs []map[string]any))`. Публичные `Tool()`, `Profile()`, `SetWidgetHandler`, `SetFileHandler`, `ask`, `pendingTaskID` сохраняются.
 
-- [ ] **Step 1: Написать падающий тест на новый проброс A2UI**
+- [x] **Step 1: Написать падающий тест на новый проброс A2UI**
 
 ```go
 func TestOrdersClientForwardsA2UIFromRemote(t *testing.T) {
@@ -777,24 +777,24 @@ func TestOrdersClientForwardsA2UIFromRemote(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Убедиться, что тест падает**
+- [x] **Step 2: Убедиться, что тест падает**
 
 Run: `go test ./internal/a2abridge/ -run TestOrdersClientForwardsA2UI -v`
 Expected: FAIL — `undefined: NewOrdersClientFromRemote`.
 
-- [ ] **Step 3: Переписать `client.go` поверх `Remote`**
+- [x] **Step 3: Переписать `client.go` поверх `Remote`**
 
 - `OrdersClient` хранит `remote *Remote` вместо `client`/`profile`/`pending`; `emptyCalls`, `onWidget`, `onFile` остаются, добавляется `onA2UI`.
 - `NewOrdersClient(ctx, workerURL, trace)` сохраняется как обёртка: `NewOrdersClientFromRemote(NewRemote(config.AgentConfig{ID: "orders", URL: workerURL}, trace))` плюс немедленный `Connect` (нынешний контракт — ошибка при недоступном воркере на старте).
 - `ask` сжимается до: пустой текст → прежняя подсказка; иначе `remote.Ask`, затем `forwardWidget`/`forwardFiles`/`forwardA2UI` и текст (`"NEEDS_USER_INPUT: " + reply.Text` при `reply.NeedsInput`).
 - `Profile()` → `remote.Profile()`; `pendingTaskID` → `remote.PendingTaskID`.
 
-- [ ] **Step 4: Прогнать весь пакет**
+- [x] **Step 4: Прогнать весь пакет**
 
 Run: `go test ./... `
 Expected: PASS — существующие e2e-тесты воркера ловят регрессии рефакторинга.
 
-- [ ] **Step 5: Коммит**
+- [x] **Step 5: Коммит**
 
 ```bash
 git add internal/a2abridge/
@@ -829,7 +829,7 @@ func (g *Registry) Clients() []*OrdersClient      // по одному на аг
 func (g *Registry) ClientFor(id string) (*OrdersClient, bool)
 ```
 
-- [ ] **Step 1: Написать падающие тесты**
+- [x] **Step 1: Написать падающие тесты**
 
 ```go
 func TestRegistryResolvesToolNameCollisions(t *testing.T) {
@@ -861,24 +861,24 @@ func TestRegistryListMarksUnavailable(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Убедиться, что тесты падают**
+- [x] **Step 2: Убедиться, что тесты падают**
 
 Run: `go test ./internal/a2abridge/ -run TestRegistry -v`
 Expected: FAIL — `undefined: NewRegistry`.
 
-- [ ] **Step 3: Реализовать `registry.go`**
+- [x] **Step 3: Реализовать `registry.go`**
 
 - Хранит порядок конфига (для `First()` и стабильного списка в UI).
 - `Clients()` создаёт `OrdersClient` лениво, по одному на агента, и кэширует.
 - Коллизия имён инструментов разрешается при первом построении: второму и далее назначается `ask_<id>`; в трейс — предупреждение.
 - `List` вызывает `Connect` на каждом агенте (быстрый таймаут не нужен: соединение кэшируется), проставляет `Available`.
 
-- [ ] **Step 4: Прогнать тесты**
+- [x] **Step 4: Прогнать тесты**
 
 Run: `go test ./internal/a2abridge/ -v`
 Expected: PASS.
 
-- [ ] **Step 5: Коммит**
+- [x] **Step 5: Коммит**
 
 ```bash
 git add internal/a2abridge/registry.go internal/a2abridge/registry_test.go
@@ -897,7 +897,7 @@ git commit -m "feat(a2abridge): Registry — набор удалённых аг�
 - Consumes: `Registry`, `Reply`.
 - Produces: `NewMultiAgentExecutor(reg *Registry, build func(oc *OrdersClient) (*runner.Runner, error), trace *Tracer) a2asrv.AgentExecutor`. Существующий `NewOrchestratorExecutor(r, oc, trace)` сохраняется как обёртка над одним агентом.
 
-- [ ] **Step 1: Написать падающие тесты**
+- [x] **Step 1: Написать падающие тесты**
 
 ```go
 // verbatim-агент не должен трогать локальную LLM: стаб настроен так, что любой
@@ -923,12 +923,12 @@ func TestExecutorUnknownAgentFallsBackToAuto(t *testing.T) { /* стаб-LLM о�
 func TestExecutorAutoExposesAllTools(t *testing.T) { /* два агента → два инструмента у runner'а */ }
 ```
 
-- [ ] **Step 2: Убедиться, что тесты падают**
+- [x] **Step 2: Убедиться, что тесты падают**
 
 Run: `go test ./internal/a2abridge/ -run TestExecutor -v`
 Expected: FAIL — `undefined: NewMultiAgentExecutor`.
 
-- [ ] **Step 3: Реализовать маршрутизацию**
+- [x] **Step 3: Реализовать маршрутизацию**
 
 - Читать `ec.Message.Metadata["agentId"]` (строка).
 - `""`/`"auto"`/неизвестный → runner со всеми инструментами (кэш по ключу `"auto"`; для неизвестного — запись в трейс).
@@ -937,12 +937,12 @@ Expected: FAIL — `undefined: NewMultiAgentExecutor`.
 - Существующая ветка прямого resume HITL-кнопок остаётся и работает для агента, который держит pending-задачу.
 - Ключ сессии для `Remote` — `ec.ContextID` (как сейчас); поскольку у каждого `Remote` своя карта сессий, разделение по агентам получается само.
 
-- [ ] **Step 4: Прогнать тесты**
+- [x] **Step 4: Прогнать тесты**
 
 Run: `go test ./... `
 Expected: PASS.
 
-- [ ] **Step 5: Коммит**
+- [x] **Step 5: Коммит**
 
 ```bash
 git add internal/a2abridge/
@@ -962,7 +962,7 @@ git commit -m "feat(a2abridge): маршрутизация по metadata.agentId
 
 > `webui` импортирует `a2abridge` только ради типа; чтобы не заводить цикл, `AgentsHandler` принимает `any`-совместимый список через дженерик-функцию `func AgentsHandler[T any](list func(context.Context) []T) http.Handler`.
 
-- [ ] **Step 1: Написать падающий тест**
+- [x] **Step 1: Написать падающий тест**
 
 ```go
 func TestAgentsHandlerServesJSON(t *testing.T) {
@@ -985,12 +985,12 @@ func TestAgentsHandlerServesJSON(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Убедиться, что тест падает**
+- [x] **Step 2: Убедиться, что тест падает**
 
 Run: `go test ./internal/webui/ -run TestAgentsHandler -v`
 Expected: FAIL — `undefined: AgentsHandler`.
 
-- [ ] **Step 3: Реализовать хендлер и проводку**
+- [x] **Step 3: Реализовать хендлер и проводку**
 
 `main.go`:
 - `reg := a2abridge.NewRegistry(cfg.Agents, trace)`.
@@ -999,12 +999,12 @@ Expected: FAIL — `undefined: AgentsHandler`.
 - TUI: `reg.ClientFor(cfg.Agents[0].ID)` — поведение как сегодня.
 - Недоступный агент больше не валит старт: `log.Printf` с предупреждением вместо `log.Fatalf`.
 
-- [ ] **Step 4: Прогнать тесты и сборку**
+- [x] **Step 4: Прогнать тесты и сборку**
 
 Run: `go build ./... && go test ./...`
 Expected: PASS.
 
-- [ ] **Step 5: Коммит**
+- [x] **Step 5: Коммит**
 
 ```bash
 git add internal/webui/ cmd/orchestrator/
@@ -1018,7 +1018,7 @@ git commit -m "feat(webui): /api/agents и проводка реестра аг�
 **Files:**
 - Modify: `web/src/client.ts`, `web/src/app.ts`
 
-- [ ] **Step 1: `client.ts` — передавать выбор агента**
+- [x] **Step 1: `client.ts` — передавать выбор агента**
 
 ```ts
 export class A2UIClient {
@@ -1030,7 +1030,7 @@ export class A2UIClient {
 ```
 В `#send` добавить в message: `...(this.#agentId && this.#agentId !== 'auto' ? {metadata: {agentId: this.#agentId}} : {})`.
 
-- [ ] **Step 2: `app.ts` — загрузка списка и `<select>`**
+- [x] **Step 2: `app.ts` — загрузка списка и `<select>`**
 
 ```ts
 interface AgentInfo {
@@ -1055,16 +1055,16 @@ async #loadAgents() {
 ```
 `connectedCallback` вызывает `void this.#loadAgents()` и `this.#client.setAgent(this._agentId)`; смена в `<select>` пишет `localStorage` и вызывает `setAgent`.
 
-- [ ] **Step 3: Спиннер с именем агента**
+- [x] **Step 3: Спиннер с именем агента**
 
 `агент печатает…` → имя выбранного агента (для `auto` — «агент»). При 52-секундном ответе важно понимать, кого ждём.
 
-- [ ] **Step 4: Сборка**
+- [x] **Step 4: Сборка**
 
 Run: `cd web && yarn build`
 Expected: сборка проходит, `internal/webui/dist/index.html` появляется.
 
-- [ ] **Step 5: Коммит**
+- [x] **Step 5: Коммит**
 
 ```bash
 git add web/src/
@@ -1078,18 +1078,18 @@ git commit -m "feat(webui): селектор агента в браузере"
 **Files:**
 - Modify: `configs/orchestrator.example.yaml`, `README.md`, `java/README.md`
 
-- [ ] **Step 1: `configs/orchestrator.example.yaml`** — блок `agents:` с обоими агентами и комментариями (включая `A2A_AGENT_<ID>_PASSWORD` и то, что `worker_url` оставлен ради совместимости).
+- [x] **Step 1: `configs/orchestrator.example.yaml`** — блок `agents:` с обоими агентами и комментариями (включая `A2A_AGENT_<ID>_PASSWORD` и то, что `worker_url` оставлен ради совместимости).
 
-- [ ] **Step 2: `README.md`** — раздел «Несколько агентов»: конфиг, выбор в UI, режимы «Авто»/явный/`verbatim`, таблица env-переменных пополняется `A2A_AGENT_<ID>_PASSWORD`.
+- [x] **Step 2: `README.md`** — раздел «Несколько агентов»: конфиг, выбор в UI, режимы «Авто»/явный/`verbatim`, таблица env-переменных пополняется `A2A_AGENT_<ID>_PASSWORD`.
 
-- [ ] **Step 3: `java/README.md`** — строка о том, что мультиагентный режим реализован только в Go-порте.
+- [x] **Step 3: `java/README.md`** — строка о том, что мультиагентный режим реализован только в Go-порте.
 
-- [ ] **Step 4: Проверка**
+- [x] **Step 4: Проверка**
 
 Run: `go build ./... && go test ./...`
 Expected: PASS.
 
-- [ ] **Step 5: Коммит**
+- [x] **Step 5: Коммит**
 
 ```bash
 git add README.md configs/orchestrator.example.yaml java/README.md
@@ -1105,3 +1105,35 @@ git commit -m "docs: мультиагентный конфиг и выбор а�
 **Согласованность имён:** `Reply` (Task 3) используется в Task 4 и 6; `AgentInfo` (Task 5) — в Task 7 и 8; `NewOrdersClientFromRemote` (Task 4) — в Task 5; `NewMultiAgentExecutor` (Task 6) — в Task 7.
 
 **Известное расхождение со спекой:** спека изначально требовала `ask_<id>` всегда; правило уточнено (карточка по умолчанию, `ask_<id>` при `description`) и спека обновлена — иначе ломается заявленное свойство демо «имя инструмента выводится из AgentCard».
+
+---
+
+## Итог выполнения (2026-08-10)
+
+Все девять задач выполнены; `go test ./...` и `yarn build` проходят. Отклонения
+от плана, все — по итогам проверки против **живого** агента:
+
+1. **Три поблажки совместимости, которых план не предвидел** (стаб их не
+   воспроизводил, обнаружены только на настоящем агенте):
+   - `a2a-go` ждёт от `SendMessage` oneof-обёртку `{"task": …}`, агент отдаёт
+     голый объект задачи → `envelopeTransport` оборачивает на лету;
+   - карточка объявляет `securitySchemes` в стиле OpenAPI, из-за чего падал
+     разбор карточки целиком → `tolerantCardParser` выкидывает эти блоки;
+   - `action.event.context` приезжает массивом пар вместо объекта → сводится в
+     объект внутри `Ingest`.
+2. **Подмена адреса из карточки** оказалась опаснее, чем в плане: слепая замена
+   URL срезала путь `/invoke` у нашего воркера. Теперь `mergeEndpoint` берёт из
+   конфига только схему и хост.
+3. **Имя делегирующего инструмента** — `ask_<id>` только при заданном
+   `description`; иначе выводится из AgentCard, как раньше (см. правку спеки).
+4. **Таймаут в браузере не поднимался**: у `fetch` его нет по умолчанию, так что
+   пункт плана оказался беспредметным.
+5. **Постоянный опциональный тест** против живого агента (`TestLiveRemoteAgent`,
+   включается через `LIVE_AGENT_URL`) — в плане его не было, но именно он ловит
+   расхождения, которые стаб принципиально не покажет.
+
+Проверено на живом стенде: `/api/agents` отдаёт обоих агентов, verbatim-ход к
+Ouroboros доезжает за ~50 с с валидным A2UI (24–29 компонентов, все из
+basic-каталога, ссылки `children` целы), путь через локальный воркер не
+изменился, режим «Авто» уходит к нужному агенту, а `metadata.agentId`
+переживает сериализацию настоящим `@a2a-js/sdk`.
