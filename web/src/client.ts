@@ -85,10 +85,17 @@ export class A2UIClient {
   #baseUrl: string;
   #client: Client | null = null;
   #contextId: string | undefined;
+  // Which agent the user picked in the selector. 'auto' lets the orchestrator's
+  // LLM route the request itself, so it is never sent over the wire.
+  #agentId = 'auto';
 
   constructor(baseUrl = '') {
     this.#baseUrl = baseUrl;
     installFetchTap();
+  }
+
+  setAgent(id: string) {
+    this.#agentId = id || 'auto';
   }
 
   async #getClient(): Promise<Client> {
@@ -106,6 +113,9 @@ export class A2UIClient {
       role: ROLE_USER,
       parts,
       ...(this.#contextId ? {contextId: this.#contextId} : {}),
+      // The chosen agent rides in the message metadata — the same mechanism
+      // A2A agents use for extension-specific hints.
+      ...(this.#agentId !== 'auto' ? {metadata: {agentId: this.#agentId}} : {}),
     } as unknown as Message;
 
     const result: SendMessageResult = await client.sendMessage(

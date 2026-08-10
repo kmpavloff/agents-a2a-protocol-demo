@@ -55,6 +55,18 @@ type Item =
   | {kind: 'widget'; surface: any}
   | {kind: 'file'; name: string; href: string};
 
+/** One selectable agent, as served by GET /api/agents. */
+interface AgentInfo {
+  id: string;
+  name: string;
+  description: string;
+  verbatim: boolean;
+  available: boolean;
+}
+
+const AGENT_STORAGE_KEY = 'a2a.agentId';
+const AUTO_AGENT = 'auto';
+
 @customElement('orders-app')
 export class OrdersApp extends LitElement {
   // Give the A2UI Text components a markdown renderer; without one they show
@@ -83,6 +95,9 @@ export class OrdersApp extends LitElement {
   @state() private _items: Item[] = [];
   @state() private _busy = false;
   @state() private _traffic: TrafficEntry[] = [];
+  @state() private _agents: AgentInfo[] = [];
+  @state() private _agentId =
+    localStorage.getItem(AGENT_STORAGE_KEY) ?? AUTO_AGENT;
 
   connectedCallback() {
     super.connectedCallback();
@@ -92,6 +107,36 @@ export class OrdersApp extends LitElement {
     onA2ATraffic((e) => {
       this._traffic = [...this._traffic, e];
     });
+    this.#client.setAgent(this._agentId);
+    void this.#loadAgents();
+  }
+
+  async #loadAgents() {
+    try {
+      const res = await fetch('/api/agents');
+      const agents: AgentInfo[] = await res.json();
+      this._agents = agents;
+      // A stale selection (agent removed from the config) falls back to auto,
+      // so the selector never shows a target the server does not know.
+      if (this._agentId !== AUTO_AGENT && !agents.some((a) => a.id === this._agentId)) {
+        this.#selectAgent(AUTO_AGENT);
+      }
+    } catch (err) {
+      console.error('agent list failed:', err);
+    }
+  }
+
+  #selectAgent(id: string) {
+    this._agentId = id;
+    localStorage.setItem(AGENT_STORAGE_KEY, id);
+    this.#client.setAgent(id);
+  }
+
+  // Whose answer we are waiting for. At tens of seconds per remote turn it
+  // matters that the user can tell which agent is busy.
+  get #busyLabel(): string {
+    const agent = this._agents.find((a) => a.id === this._agentId);
+    return agent ? agent.name : 'агент';
   }
 
   // Runs one exchange: optionally record a user entry, call the agent, then
@@ -148,6 +193,26 @@ export class OrdersApp extends LitElement {
     }
     h2 {
       font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .agent-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: #57606a;
+    }
+    .agent-bar select {
+      padding: 6px 10px;
+      border-radius: 8px;
+      border: 1px solid #ccc;
+      background: #fff;
+      color: #222;
+      font-size: 13px;
+    }
+    .agent-note {
+      font-size: 12px;
+      color: #8b949e;
     }
     .feed {
       display: flex;
@@ -350,12 +415,36 @@ export class OrdersApp extends LitElement {
   }
 
   render() {
+    const selected = this._agents.find((a) => a.id === this._agentId);
     return html`
       <h2>Ассистент заказов · A2UI</h2>
+      ${this._agents.length
+        ? html`<div class="agent-bar">
+            <label for="agent">Агент:</label>
+            <select
+              id="agent"
+              .value=${this._agentId}
+              @change=${(e: Event) =>
+                this.#selectAgent((e.target as HTMLSelectElement).value)}
+            >
+              <option value=${AUTO_AGENT}>Авто (выбирает модель)</option>
+              ${this._agents.map(
+                (a) => html`<option value=${a.id} ?disabled=${!a.available}>
+                  ${a.name}${a.available ? '' : ' — недоступен'}
+                </option>`,
+              )}
+            </select>
+            ${selected?.verbatim
+              ? html`<span class="agent-note">отвечает напрямую, без локальной модели</span>`
+              : nothing}
+          </div>`
+        : nothing}
       <div class="feed">
         ${this._items.map((it) => this.#renderItem(it))}
         ${this._busy
-          ? html`<div class="thinking"><span class="spinner"></span> агент печатает…</div>`
+          ? html`<div class="thinking">
+              <span class="spinner"></span> ${this.#busyLabel} печатает…
+            </div>`
           : nothing}
       </div>
       <form
