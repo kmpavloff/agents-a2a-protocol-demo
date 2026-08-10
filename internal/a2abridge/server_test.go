@@ -188,4 +188,3 @@ func TestExecutorRequestsRefundConfirmation(t *testing.T) {
 		t.Error("refund executed before confirmation")
 	}
 }
-

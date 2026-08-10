@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -190,6 +192,26 @@ func tolerantCardParser(trace *Tracer) agentcard.Parser {
 	}
 }
 
+// mergeEndpoint строит рабочий адрес транспорта: схема и хост из конфига (по
+// нему карточка и была получена), путь из карточки. Так и нерабочий 0.0.0.0
+// внутри чужой карточки не мешает, и объявленный агентом путь (/invoke у нашего
+// воркера) не теряется.
+func mergeEndpoint(base, declared string) string {
+	b, err := url.Parse(base)
+	if err != nil {
+		return declared
+	}
+	d, err := url.Parse(declared)
+	if err != nil {
+		return base
+	}
+	out := *b
+	if d.Path != "" && d.Path != "/" {
+		out.Path = path.Join(b.Path, d.Path)
+	}
+	return out.String()
+}
+
 // Remote — одно соединение с одним удалённым A2A-агентом: карточка,
 // аутентификация, сессии и один ход разговора. Знает про особенности чужих
 // агентов (нестандартный путь карточки, нерабочий адрес внутри неё,
@@ -303,9 +325,10 @@ func (r *Remote) Connect(ctx context.Context) error {
 		r.available = false
 		return fmt.Errorf("resolve card of %q at %s%s: %w", r.cfg.ID, r.cfg.URL, r.cfg.CardPath, err)
 	}
-	// Адрес из карточки бывает нерабочим (живой агент объявляет
-	// http://0.0.0.0:18800/), поэтому транспорт всегда идёт по адресу из
-	// конфига — по нему мы карточку и получили.
+	// Хост из карточки бывает нерабочим (живой агент объявляет
+	// http://0.0.0.0:18800/), поэтому схему и хост берём из конфига — по нему мы
+	// карточку и получили. Путь остаётся из карточки: наш воркер объявляет
+	// эндпоинт /invoke, и потерять его нельзя.
 	if len(card.SupportedInterfaces) == 0 {
 		card.SupportedInterfaces = []*a2a.AgentInterface{
 			a2a.NewAgentInterface(r.cfg.URL, a2a.TransportProtocolJSONRPC),
@@ -313,7 +336,7 @@ func (r *Remote) Connect(ctx context.Context) error {
 	} else {
 		for _, iface := range card.SupportedInterfaces {
 			if iface != nil {
-				iface.URL = r.cfg.URL
+				iface.URL = mergeEndpoint(r.cfg.URL, iface.URL)
 			}
 		}
 	}
@@ -555,4 +578,78 @@ func (r *Remote) clearPending(sessionID string) {
 	r.mu.Lock()
 	delete(r.pending, sessionID)
 	r.mu.Unlock()
+}
+
+// statusParts returns the parts of an input-required task's status message.
+func statusParts(t *a2a.Task) []*a2a.Part {
+	if t.Status.Message == nil {
+		return nil
+	}
+	return t.Status.Message.Parts
+}
+
+// artifactParts returns the parts of a task's last artifact.
+func artifactParts(t *a2a.Task) []*a2a.Part {
+	if len(t.Artifacts) == 0 {
+		return nil
+	}
+	return t.Artifacts[len(t.Artifacts)-1].Parts
+}
+
+// firstWidget returns the payload of the first DataPart whose metadata.kind
+// marks it as a widget ("widget/..."), with the kind injected under "_kind" so
+// a renderer can dispatch on it. Returns nil when there is no widget part.
+func firstWidget(parts []*a2a.Part) map[string]any {
+	for _, p := range parts {
+		if p == nil {
+			continue
+		}
+		kind, _ := p.Metadata["kind"].(string)
+		if !strings.HasPrefix(kind, "widget/") {
+			continue
+		}
+		data, ok := p.Data().(map[string]any)
+		if !ok {
+			continue
+		}
+		out := map[string]any{"_kind": kind}
+		for k, v := range data {
+			out[k] = v
+		}
+		return out
+	}
+	return nil
+}
+
+// statusMessageText extracts the question text from an input-required task's
+// status message.
+func statusMessageText(t *a2a.Task) string {
+	if t.Status.Message != nil && len(t.Status.Message.Parts) > 0 {
+		return t.Status.Message.Parts[0].Text()
+	}
+	return "Агенту по заказам нужны дополнительные данные."
+}
+
+// taskResultText returns the last artifact text of a completed task, falling
+// back to the last history message text, then "Done." if neither is present.
+// Empty-text parts are skipped so that a blank artifact falls through to the
+// "Done." fallback rather than returning an empty string.
+func taskResultText(t *a2a.Task) string {
+	if len(t.Artifacts) > 0 {
+		last := t.Artifacts[len(t.Artifacts)-1]
+		for _, p := range last.Parts {
+			if txt := p.Text(); txt != "" {
+				return txt
+			}
+		}
+	}
+	if len(t.History) > 0 {
+		last := t.History[len(t.History)-1]
+		for _, p := range last.Parts {
+			if txt := p.Text(); txt != "" {
+				return txt
+			}
+		}
+	}
+	return "Готово."
 }

@@ -71,9 +71,9 @@ func startWorkerWithTools(t *testing.T, model *llm.Stub, store *orders.Store) st
 }
 
 func TestClientRejectsEmptyMessageWithoutA2ACall(t *testing.T) {
-	// A client with a nil a2a client would panic if ask actually made a call;
-	// the empty-message guard must return before any A2A round-trip.
-	c := &OrdersClient{pending: make(map[string]pending)}
+	// A client with no remote would panic if ask actually made a call; the
+	// empty-message guard must return before any A2A round-trip.
+	c := &OrdersClient{}
 	for _, text := range []string{"", "   ", "\t\n"} {
 		out, err := c.ask(context.Background(), "sess", text)
 		if err != nil {
@@ -174,5 +174,24 @@ func TestToolNameFromCard(t *testing.T) {
 	}
 	if c.Profile().ToolName != tl.Name() {
 		t.Errorf("Profile().ToolName %q != tool.Name() %q", c.Profile().ToolName, tl.Name())
+	}
+}
+
+// A2UI, который агент собрал сам, должен попасть в UI, минуя LLM.
+func TestOrdersClientForwardsA2UIFromRemote(t *testing.T) {
+	s := startOuroborosStub(t, false)
+	oc := NewOrdersClientFromRemote(NewRemote(ouroborosCfg(s.URL), nil))
+	var got []map[string]any
+	oc.SetA2UIHandler(func(_ string, msgs []map[string]any) { got = append(got, msgs...) })
+
+	out, err := oc.ask(context.Background(), "sess-1", "статус заказа")
+	if err != nil {
+		t.Fatalf("ask: %v", err)
+	}
+	if out != "Заказ доставлен" {
+		t.Errorf("tool result: got %q", out)
+	}
+	if len(got) != 2 {
+		t.Fatalf("a2ui forwarded: got %d, want 2", len(got))
 	}
 }

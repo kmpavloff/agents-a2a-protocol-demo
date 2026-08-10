@@ -28,9 +28,9 @@ func TestValidCard(t *testing.T) {
 		}
 	}
 	invalid := []string{
-		"4111111111111112", // Luhn fails
-		"1234567890123456", // Luhn fails
-		"411111111111",     // too short (12)
+		"4111111111111112",     // Luhn fails
+		"1234567890123456",     // Luhn fails
+		"411111111111",         // too short (12)
 		"41111111111111111111", // too long (20)
 		"",
 	}

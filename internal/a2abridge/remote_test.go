@@ -298,3 +298,18 @@ func TestWrapBareResult(t *testing.T) {
 		})
 	}
 }
+
+func TestMergeEndpoint(t *testing.T) {
+	cases := []struct{ base, declared, want string }{
+		// Чужая карточка объявляет нерабочий хост — берём хост из конфига.
+		{"http://192.168.1.68:18800", "http://0.0.0.0:18800/", "http://192.168.1.68:18800"},
+		// Наш воркер объявляет путь /invoke — терять его нельзя.
+		{"http://127.0.0.1:8081", "http://127.0.0.1:8081/invoke", "http://127.0.0.1:8081/invoke"},
+		{"http://127.0.0.1:8081", "http://0.0.0.0:8081/invoke", "http://127.0.0.1:8081/invoke"},
+	}
+	for _, c := range cases {
+		if got := mergeEndpoint(c.base, c.declared); got != c.want {
+			t.Errorf("mergeEndpoint(%q, %q) = %q, want %q", c.base, c.declared, got, c.want)
+		}
+	}
+}
