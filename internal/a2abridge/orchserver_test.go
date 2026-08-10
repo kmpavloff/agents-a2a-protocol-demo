@@ -2,6 +2,7 @@ package a2abridge
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -11,10 +12,12 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
+	"google.golang.org/adk/tool"
 	"google.golang.org/genai"
 
 	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/a2ui"
 	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/agent"
+	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/config"
 	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/llm"
 )
 
@@ -58,27 +61,35 @@ func (a *a2uiTestClient) sendText(t *testing.T, text string) []*a2a.Part {
 	return parts
 }
 
-// startOrchestrator wires an orchestrator runner whose ask_orders_agent tool
-// delegates to a real in-process worker, then returns an A2A test server URL for
+// startOrchestrator wires an orchestrator over a registry holding a single
+// agent — the real in-process worker — and returns an A2A test server URL for
 // the orchestrator itself.
 func startOrchestrator(t *testing.T, orchModel *llm.Stub, workerURL string) (string, *OrdersClient) {
 	t.Helper()
-	oc, err := NewOrdersClient(context.Background(), workerURL, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ag, err := agent.NewOrchestrator(orchModel, oc.Tool(), oc.Profile().Summary)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r, err := runner.New(runner.Config{
-		AppName: "orch", Agent: ag,
-		SessionService: session.InMemoryService(), AutoCreateSession: true,
+	return startOrchestratorWith(t, orchModel, []config.AgentConfig{
+		{ID: "orders", Name: "Агент заказов", URL: workerURL, CardPath: "/.well-known/agent-card.json"},
 	})
-	if err != nil {
-		t.Fatal(err)
+}
+
+// startOrchestratorWith wires an orchestrator over an arbitrary set of agents.
+func startOrchestratorWith(t *testing.T, orchModel *llm.Stub, agents []config.AgentConfig) (string, *OrdersClient) {
+	t.Helper()
+	reg := NewRegistry(agents, nil)
+	build := func(tools []tool.Tool, summary string) (*runner.Runner, error) {
+		ag, err := agent.NewOrchestrator(orchModel, tools, summary)
+		if err != nil {
+			return nil, err
+		}
+		return runner.New(runner.Config{
+			AppName: "orch", Agent: ag,
+			SessionService: session.InMemoryService(), AutoCreateSession: true,
+		})
 	}
-	url := serveExecutor(t, NewOrchestratorExecutor(r, oc, nil), OrchestratorCard)
+	url := serveExecutor(t, NewOrchestratorExecutor(reg, build, nil), OrchestratorCard)
+	oc, ok := reg.ClientFor(agents[0].ID)
+	if !ok {
+		t.Fatalf("registry has no client for %q", agents[0].ID)
+	}
 	return url, oc
 }
 
@@ -214,4 +225,147 @@ func partsSummary(parts []*a2a.Part) []string {
 		}
 	}
 	return out
+}
+
+// failingBuilder проваливает тест при любой попытке собрать LLM-runner.
+func failingBuilder(t *testing.T) RunnerBuilder {
+	t.Helper()
+	return func([]tool.Tool, string) (*runner.Runner, error) {
+		t.Error("verbatim turn must not build an LLM runner")
+		return nil, fmt.Errorf("runner must not be built")
+	}
+}
+
+// Явно выбранный verbatim-агент отвечает мимо локальной модели: её пересказ
+// только испортил бы уже готовый ответ и добавил бы задержку поверх удалённой.
+func TestExecutorVerbatimBypassesLLM(t *testing.T) {
+	s := startOuroborosStub(t, false)
+	reg := NewRegistry([]config.AgentConfig{ouroborosCfg(s.URL)}, nil)
+	url := serveExecutor(t, NewOrchestratorExecutor(reg, failingBuilder(t), nil), OrchestratorCard)
+
+	probe := newA2UIClient(t, url)
+	probe.c.AgentID = "ouroboros"
+	parts := probe.sendText(t, "статус заказа ORD-001")
+
+	text, a2uiParts := "", 0
+	for _, p := range parts {
+		if p == nil {
+			continue
+		}
+		if p.MediaType == a2ui.MIMEType {
+			a2uiParts++
+			continue
+		}
+		if txt := p.Text(); txt != "" {
+			text = txt
+		}
+	}
+	if text != "Заказ доставлен" {
+		t.Errorf("verbatim text: got %q", text)
+	}
+	if a2uiParts == 0 {
+		t.Errorf("expected the agent's A2UI to pass through, got parts=%#v", parts)
+	}
+}
+
+// Браузер с устаревшим списком агентов не должен ломать диалог.
+func TestExecutorUnknownAgentFallsBackToAuto(t *testing.T) {
+	workerURL := startWorker(t, llm.NewStub(llm.StubTurn{Text: "неважно"}))
+	orchModel := llm.NewStub(llm.StubTurn{Text: "Здравствуйте!"})
+	url, _ := startOrchestrator(t, orchModel, workerURL)
+
+	probe := newA2UIClient(t, url)
+	probe.c.AgentID = "несуществующий"
+	parts := probe.sendText(t, "привет")
+
+	if len(parts) == 0 || parts[0].Text() != "Здравствуйте!" {
+		t.Fatalf("expected the auto path to answer, got %#v", parts)
+	}
+}
+
+// В режиме «Авто» модель видит инструменты всех доступных агентов.
+func TestExecutorAutoExposesEveryTool(t *testing.T) {
+	workerURL := startWorker(t, llm.NewStub(llm.StubTurn{Text: "неважно"}))
+	s := startOuroborosStub(t, false)
+	external := ouroborosCfg(s.URL)
+	external.Verbatim = false // в «Авто» агент участвует как обычный инструмент
+
+	reg := NewRegistry([]config.AgentConfig{
+		{ID: "orders", Name: "Агент заказов", URL: workerURL, CardPath: "/.well-known/agent-card.json"},
+		external,
+	}, nil)
+
+	var gotTools []string
+	build := func(tools []tool.Tool, summary string) (*runner.Runner, error) {
+		for _, tl := range tools {
+			gotTools = append(gotTools, tl.Name())
+		}
+		ag, err := agent.NewOrchestrator(llm.NewStub(llm.StubTurn{Text: "ок"}), tools, summary)
+		if err != nil {
+			return nil, err
+		}
+		return runner.New(runner.Config{
+			AppName: "orch", Agent: ag,
+			SessionService: session.InMemoryService(), AutoCreateSession: true,
+		})
+	}
+	url := serveExecutor(t, NewOrchestratorExecutor(reg, build, nil), OrchestratorCard)
+
+	probe := newA2UIClient(t, url)
+	probe.sendText(t, "привет")
+
+	if len(gotTools) != 2 {
+		t.Fatalf("auto mode tools: got %v, want two", gotTools)
+	}
+	if gotTools[0] != "ask_orders_agent" || gotTools[1] != "ask_ouroboros" {
+		t.Errorf("tool names: %v", gotTools)
+	}
+}
+
+// При явном выборе агента модель получает ровно один инструмент.
+func TestExecutorExplicitSelectionNarrowsTools(t *testing.T) {
+	workerURL := startWorker(t, llm.NewStub(llm.StubTurn{Text: "неважно"}))
+	s := startOuroborosStub(t, false)
+	external := ouroborosCfg(s.URL)
+	external.Verbatim = false
+
+	reg := NewRegistry([]config.AgentConfig{
+		{ID: "orders", Name: "Агент заказов", URL: workerURL, CardPath: "/.well-known/agent-card.json"},
+		external,
+	}, nil)
+
+	var gotTools []string
+	build := func(tools []tool.Tool, summary string) (*runner.Runner, error) {
+		for _, tl := range tools {
+			gotTools = append(gotTools, tl.Name())
+		}
+		ag, err := agent.NewOrchestrator(llm.NewStub(llm.StubTurn{Text: "ок"}), tools, summary)
+		if err != nil {
+			return nil, err
+		}
+		return runner.New(runner.Config{
+			AppName: "orch", Agent: ag,
+			SessionService: session.InMemoryService(), AutoCreateSession: true,
+		})
+	}
+	url := serveExecutor(t, NewOrchestratorExecutor(reg, build, nil), OrchestratorCard)
+
+	probe := newA2UIClient(t, url)
+	probe.c.AgentID = "ouroboros"
+	probe.sendText(t, "привет")
+
+	if len(gotTools) != 1 || gotTools[0] != "ask_ouroboros" {
+		t.Fatalf("explicit selection tools: got %v, want [ask_ouroboros]", gotTools)
+	}
+}
+
+func TestActionToPromptDescribesUnknownButton(t *testing.T) {
+	got := actionToPrompt("return_order", map[string]any{"label": "Оформить возврат", "order_id": "ORD-001"})
+	if !strings.Contains(got, "Оформить возврат") || !strings.Contains(got, "order_id: ORD-001") {
+		t.Errorf("prompt: %q", got)
+	}
+	// Наши HITL-кнопки сохраняют канонические ответы.
+	if got := actionToPrompt("approve_refund", map[string]any{}); got != "да" {
+		t.Errorf("approve_refund → %q, want «да»", got)
+	}
 }

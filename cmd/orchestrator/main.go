@@ -11,6 +11,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
+	"google.golang.org/adk/tool"
 
 	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/a2abridge"
 	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/agent"
@@ -47,41 +48,64 @@ func main() {
 	trace := a2abridge.NewTracer(traceW, "[A2A client] ")
 	log.Printf("A2A protocol trace → %s", traceDst)
 
-	oc, err := a2abridge.NewOrdersClient(ctx, cfg.WorkerURL, trace)
-	if err != nil {
-		log.Fatalf("orders client (is the worker running at %s?): %v", cfg.WorkerURL, err)
-	}
+	reg := a2abridge.NewRegistry(cfg.Agents, trace)
 	model := llm.New(cfg.LLM)
-	log.Printf("orchestrator | LLM=%s model=%q | worker=%s", cfg.LLM.BaseURL, cfg.LLM.Model, cfg.WorkerURL)
-	ordersTool := oc.Tool()
-	log.Printf("orchestrator tools (1):")
-	log.Printf("  - %s: %s", ordersTool.Name(), ordersTool.Description())
-	ag, err := agent.NewOrchestrator(model, ordersTool, oc.Profile().Summary)
-	if err != nil {
-		log.Fatalf("agent: %v", err)
+	log.Printf("orchestrator | LLM=%s model=%q", cfg.LLM.BaseURL, cfg.LLM.Model)
+	log.Printf("agents (%d):", len(cfg.Agents))
+	for _, a := range cfg.Agents {
+		// Пароль сюда не попадает намеренно: логи демо показывают целиком.
+		log.Printf("  - %s → %s (card %s, skill=%q, verbatim=%v, timeout=%s)",
+			a.ID, a.URL, a.CardPath, a.Skill, a.Verbatim, a.TimeoutDuration())
 	}
-	r, err := runner.New(runner.Config{
-		AppName:           "orchestrator",
-		Agent:             ag,
-		SessionService:    session.InMemoryService(),
-		AutoCreateSession: true,
-	})
-	if err != nil {
-		log.Fatalf("runner: %v", err)
+
+	// buildRunner собирает runner под набор инструментов выбранного агента:
+	// в режиме «Авто» их несколько, при явном выборе — ровно один.
+	buildRunner := func(tools []tool.Tool, summary string) (*runner.Runner, error) {
+		ag, err := agent.NewOrchestrator(model, tools, summary)
+		if err != nil {
+			return nil, err
+		}
+		return runner.New(runner.Config{
+			AppName:           "orchestrator",
+			Agent:             ag,
+			SessionService:    session.InMemoryService(),
+			AutoCreateSession: true,
+		})
 	}
+
 	if *web {
-		exec := a2abridge.NewOrchestratorExecutor(r, oc, trace)
+		exec := a2abridge.NewOrchestratorExecutor(reg, buildRunner, trace)
 		handler := a2asrv.NewHandler(exec)
 		mux := http.NewServeMux()
 		// JSON-RPC endpoint — matches the URL advertised in the agent card (publicURL/invoke).
 		mux.Handle("/invoke", a2asrv.NewJSONRPCHandler(handler))
 		// Well-known agent card path — used by a2aclient resolver / A2UI-aware browsers.
 		mux.Handle(a2asrv.WellKnownAgentCardPath, a2asrv.NewStaticAgentCardHandler(a2abridge.OrchestratorCard(cfg.PublicURL)))
+		// Список агентов для селектора в браузере.
+		mux.Handle("/api/agents", webui.AgentsHandler(reg.List))
 		// Embedded frontend.
 		mux.Handle("/", webui.Handler())
 		log.Printf("orchestrator web UI on %s", cfg.ListenAddr)
 		log.Fatal(http.ListenAndServe(cfg.ListenAddr, mux))
 		return
+	}
+
+	// Терминальный REPL выбора агента не даёт и работает с первым агентом
+	// списка — то есть после миграции с worker_url ведёт себя как раньше.
+	first := reg.First()
+	if err := first.Connect(ctx); err != nil {
+		log.Fatalf("agent %q (запущен ли он?): %v", first.ID(), err)
+	}
+	oc, ok := reg.ClientFor(first.ID())
+	if !ok {
+		log.Fatalf("agent %q not in registry", first.ID())
+	}
+	ordersTool := oc.Tool()
+	log.Printf("orchestrator tools (1):")
+	log.Printf("  - %s: %s", ordersTool.Name(), ordersTool.Description())
+	r, err := buildRunner([]tool.Tool{ordersTool}, oc.Profile().Summary)
+	if err != nil {
+		log.Fatalf("runner: %v", err)
 	}
 
 	// Widgets the worker returns in DataParts render directly in the terminal,

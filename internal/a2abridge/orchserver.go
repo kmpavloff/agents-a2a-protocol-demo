@@ -2,7 +2,9 @@ package a2abridge
 
 import (
 	"context"
+	"fmt"
 	"iter"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/runner"
+	"google.golang.org/adk/tool"
 	"google.golang.org/genai"
 
 	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/a2ui"
@@ -26,39 +29,137 @@ type attachedFile struct {
 	data      []byte
 }
 
+// autoAgentID — значение agentId, означающее «модель выбирает агента сама».
+const autoAgentID = "auto"
+
+// RunnerBuilder собирает adk-runner под конкретный набор делегирующих
+// инструментов и блок возможностей для промпта. Набор зависит от того, какой
+// агент выбран в UI, поэтому runner нельзя собрать один раз на старте.
+type RunnerBuilder func(tools []tool.Tool, summary string) (*runner.Runner, error)
+
 type orchExecutor struct {
-	runner *runner.Runner
-	oc     *OrdersClient
-	trace  *Tracer
+	reg   *Registry
+	build RunnerBuilder
+	trace *Tracer
 
 	mu      sync.Mutex
+	runners map[string]*runner.Runner   // agentId (или "auto") → runner
 	widgets map[string][]map[string]any // sessionID → widgets produced this turn
+	a2uis   map[string][]map[string]any // sessionID → A2UI messages produced this turn
 	files   map[string][]attachedFile   // sessionID → files produced this turn
 }
 
-// NewOrchestratorExecutor wraps the orchestrator runner as an A2A server that
-// speaks the A2UI extension: it maps worker widgets to A2UI JSON and translates
-// incoming A2UI button actions into task resumes. trace may be nil.
-func NewOrchestratorExecutor(r *runner.Runner, oc *OrdersClient, trace *Tracer) a2asrv.AgentExecutor {
+// NewOrchestratorExecutor wraps the registry of remote agents as an A2A server
+// that speaks the A2UI extension: it maps worker widgets to A2UI JSON, passes
+// agent-authored A2UI through, and translates incoming A2UI button actions into
+// task resumes. trace may be nil.
+func NewOrchestratorExecutor(reg *Registry, build RunnerBuilder, trace *Tracer) a2asrv.AgentExecutor {
 	e := &orchExecutor{
-		runner:  r,
-		oc:      oc,
+		reg:     reg,
+		build:   build,
 		trace:   trace,
+		runners: make(map[string]*runner.Runner),
 		widgets: make(map[string][]map[string]any),
+		a2uis:   make(map[string][]map[string]any),
 		files:   make(map[string][]attachedFile),
 	}
-	// One global handler routes each widget/file to its session's slot.
-	oc.SetWidgetHandler(func(sessionID string, w map[string]any) {
-		e.mu.Lock()
-		e.widgets[sessionID] = append(e.widgets[sessionID], w)
-		e.mu.Unlock()
-	})
-	oc.SetFileHandler(func(sessionID, filename, mediaType string, data []byte) {
-		e.mu.Lock()
-		e.files[sessionID] = append(e.files[sessionID], attachedFile{name: filename, mediaType: mediaType, data: data})
-		e.mu.Unlock()
-	})
+	// One handler per agent routes each widget/A2UI/file to its session's slot.
+	for _, id := range reg.IDs() {
+		c, ok := reg.ClientFor(id)
+		if !ok {
+			continue
+		}
+		c.SetWidgetHandler(func(sessionID string, w map[string]any) {
+			e.mu.Lock()
+			e.widgets[sessionID] = append(e.widgets[sessionID], w)
+			e.mu.Unlock()
+		})
+		c.SetA2UIHandler(func(sessionID string, msgs []map[string]any) {
+			e.mu.Lock()
+			e.a2uis[sessionID] = append(e.a2uis[sessionID], msgs...)
+			e.mu.Unlock()
+		})
+		c.SetFileHandler(func(sessionID, filename, mediaType string, data []byte) {
+			e.mu.Lock()
+			e.files[sessionID] = append(e.files[sessionID], attachedFile{name: filename, mediaType: mediaType, data: data})
+			e.mu.Unlock()
+		})
+	}
 	return e
+}
+
+// selectAgent reads the agent chosen in the UI from the message metadata. An
+// unknown id silently falls back to "auto": a browser holding a stale agent list
+// must not break the conversation.
+func (e *orchExecutor) selectAgent(msg *a2a.Message) string {
+	if msg == nil || msg.Metadata == nil {
+		return autoAgentID
+	}
+	id, _ := msg.Metadata["agentId"].(string)
+	if id == "" || id == autoAgentID {
+		return autoAgentID
+	}
+	if _, ok := e.reg.Get(id); !ok {
+		e.trace.Logf("⚠ unknown agentId %q — falling back to auto", id)
+		return autoAgentID
+	}
+	return id
+}
+
+// runnerFor returns the runner for the chosen agent: with every agent's tool in
+// "auto" mode, or with exactly one tool when the user picked an agent. Runners
+// are cached per selection.
+func (e *orchExecutor) runnerFor(ctx context.Context, agentID string) (*runner.Runner, error) {
+	e.mu.Lock()
+	r, ok := e.runners[agentID]
+	e.mu.Unlock()
+	if ok {
+		return r, nil
+	}
+
+	var tools []tool.Tool
+	var summary string
+	if agentID == autoAgentID {
+		tools = e.reg.Tools(ctx)
+		summary = strings.Join(e.reg.Summaries(ctx), "\n\n")
+	} else {
+		remote, ok := e.reg.Get(agentID)
+		if !ok {
+			return nil, fmt.Errorf("unknown agent %q", agentID)
+		}
+		if err := remote.Connect(ctx); err != nil {
+			return nil, err
+		}
+		c, ok := e.reg.ClientFor(agentID)
+		if !ok {
+			return nil, fmt.Errorf("unknown agent %q", agentID)
+		}
+		tools = []tool.Tool{c.Tool()}
+		summary = remote.Profile().Summary
+	}
+	if len(tools) == 0 {
+		return nil, fmt.Errorf("нет доступных агентов")
+	}
+
+	r, err := e.build(tools, summary)
+	if err != nil {
+		return nil, err
+	}
+	e.mu.Lock()
+	e.runners[agentID] = r
+	e.mu.Unlock()
+	return r, nil
+}
+
+// drain takes everything collected for the session during this turn.
+func (e *orchExecutor) drain(sessionID string) ([]map[string]any, []map[string]any, []attachedFile) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	ws, msgs, fs := e.widgets[sessionID], e.a2uis[sessionID], e.files[sessionID]
+	delete(e.widgets, sessionID)
+	delete(e.a2uis, sessionID)
+	delete(e.files, sessionID)
+	return ws, msgs, fs
 }
 
 // actionToText maps an A2UI button action name to the user text the orchestrator
@@ -121,11 +222,13 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 		// Parse input: an A2UI action DataPart, or plain text.
 		userText := ""
 		actionName := ""
+		actionCtx := map[string]any{}
 		if ec.Message != nil {
 			for _, p := range ec.Message.Parts {
 				if data, ok := p.Data().(map[string]any); ok {
 					if name, actx, ok := a2ui.ParseAction(data); ok {
 						actionName = name
+						actionCtx = actx
 						userText = actionToText(name, actx)
 						if name == "submit_refund_details" {
 							delete(actx, "card_number") // keep the number out of the trace
@@ -141,11 +244,43 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 			}
 		}
 
-		// Reset this session's widget/file slots before the run.
-		e.mu.Lock()
-		delete(e.widgets, sessionID)
-		delete(e.files, sessionID)
-		e.mu.Unlock()
+		agentID := e.selectAgent(ec.Message)
+		e.trace.Logf("  agent selection: %s", agentID)
+
+		// Reset this session's slots before the run.
+		e.drain(sessionID)
+
+		emit := func(text string, ws, msgs []map[string]any, fs []attachedFile, what string) {
+			parts := []*a2a.Part{a2a.NewTextPart(strings.TrimSpace(orDefault(text, "Готово.")))}
+			parts = append(parts, e.a2uiParts(a2uiActive, ws)...)
+			parts = append(parts, e.a2uiMessageParts(a2uiActive, msgs)...)
+			parts = append(parts, fileParts(fs)...)
+			e.trace.Logf("  → emit: artifact + completed | %s | parts=%d requestTook=%s",
+				what, len(parts), time.Since(reqStart).Round(time.Millisecond))
+			if !yield(a2a.NewArtifactEvent(ec, parts...), nil) {
+				return
+			}
+			yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateCompleted, nil), nil)
+		}
+
+		// An explicitly chosen verbatim agent answers the user directly: its text
+		// and its A2UI go to the browser untouched. Running a local model over an
+		// answer that is already final would only paraphrase it away and add its
+		// own latency on top of the remote agent's.
+		if remote, ok := e.reg.Get(agentID); ok && agentID != autoAgentID && remote.Verbatim() {
+			if actionName != "" {
+				userText = actionToPrompt(actionName, actionCtx)
+			}
+			e.trace.Logf("  verbatim agent %q → no local LLM", agentID)
+			reply, err := remote.Ask(ctx, sessionID, userText)
+			if err != nil {
+				e.trace.Logf("  ✖ verbatim turn failed: %v", err)
+				emit(fmt.Sprintf("Агент %q недоступен: %v", remote.Name(), err), nil, nil, nil, "verbatim error")
+				return
+			}
+			emit(reply.Text, reply.Widgets, reply.A2UI, reply.Files, "verbatim")
+			return
+		}
 
 		// A button on a pending HITL step (yes/no confirmation, or the card
 		// form) resumes the worker task DIRECTLY with the canonical answer,
@@ -154,10 +289,10 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 		// rejects; and card details should never pass through an LLM at all.
 		directResume := actionName == "approve_refund" || actionName == "decline_refund" ||
 			actionName == "submit_refund_details"
-		if directResume && e.oc.pendingTaskID(sessionID) != "" {
+		if oc := e.pendingClient(agentID, sessionID); directResume && oc != nil {
 			e.trace.Logf("  confirmation button %q → resuming worker directly with %q (LLM bypassed)",
 				actionName, safeActionEcho(actionName, userText))
-			result, err := e.oc.ask(ctx, sessionID, userText)
+			result, err := oc.ask(ctx, sessionID, userText)
 			if err != nil {
 				e.trace.Logf("  ✖ direct resume error: %v", err)
 				yield(nil, err)
@@ -166,32 +301,26 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 			// The resume may complete the task (receipt widget + file) or pause
 			// it again (the card form after "да") — both carry widgets, and a
 			// completion may carry files; emit them like a normal turn.
-			e.mu.Lock()
-			ws := e.widgets[sessionID]
-			fs := e.files[sessionID]
-			delete(e.widgets, sessionID)
-			delete(e.files, sessionID)
-			e.mu.Unlock()
-			parts := []*a2a.Part{a2a.NewTextPart(strings.TrimSpace(orDefault(stripNeedsInput(result), "Готово.")))}
-			parts = append(parts, e.a2uiParts(a2uiActive, ws)...)
-			parts = append(parts, fileParts(fs)...)
-			e.trace.Logf("  → emit: artifact + completed | direct HITL resume | parts=%d", len(parts))
-			if !yield(a2a.NewArtifactEvent(ec, parts...), nil) {
-				return
-			}
-			yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateCompleted, nil), nil)
+			ws, msgs, fs := e.drain(sessionID)
+			emit(stripNeedsInput(result), ws, msgs, fs, "direct HITL resume")
 			return
 		}
 
-		// Run the orchestrator LLM. The ask_orders_agent tool delegates to the
-		// worker and forwards any widget through the session handler above.
+		// Run the orchestrator LLM. Its delegating tools call the remote agents
+		// and forward any widget/A2UI through the session handlers above.
+		r, err := e.runnerFor(ctx, agentID)
+		if err != nil {
+			e.trace.Logf("  ✖ runner unavailable: %v", err)
+			emit(fmt.Sprintf("Не удалось обратиться к агенту: %v", err), nil, nil, nil, "runner error")
+			return
+		}
 		e.trace.Logf("%s  · оркестратор → LLM: %q%s", gray, userText, reset)
 		llmStart := time.Now()
 		msg := genai.NewContentFromText(userText, genai.RoleUser)
 		var finalText string
 		toolCalls := 0
 		limitHit := false
-		for event, err := range e.runner.Run(ctx, "a2ui-user", sessionID, msg, agent.RunConfig{}) {
+		for event, err := range r.Run(ctx, "a2ui-user", sessionID, msg, agent.RunConfig{}) {
 			if err != nil {
 				e.trace.Logf("  ✖ runner error: %v", err)
 				yield(nil, err)
@@ -229,26 +358,59 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 		e.trace.Logf("  LLM finished in %s | toolCalls=%d limitHit=%v finalText=%q",
 			time.Since(llmStart).Round(time.Millisecond), toolCalls, limitHit, strings.TrimSpace(finalText))
 
-		// Drain this session's widget/file slots unconditionally so text-only
-		// sessions don't leak map entries; only emit A2UI parts when active.
-		e.mu.Lock()
-		ws := e.widgets[sessionID]
-		fs := e.files[sessionID]
-		delete(e.widgets, sessionID)
-		delete(e.files, sessionID)
-		e.mu.Unlock()
-
-		// Assemble the artifact: text first (fallback), then A2UI parts, then files.
-		parts := []*a2a.Part{a2a.NewTextPart(strings.TrimSpace(orDefault(finalText, "Готово.")))}
-		parts = append(parts, e.a2uiParts(a2uiActive, ws)...)
-		parts = append(parts, fileParts(fs)...)
-		e.trace.Logf("  → emit: artifact + completed | textPart=1 extraParts=%d requestTook=%s",
-			len(parts)-1, time.Since(reqStart).Round(time.Millisecond))
-		if !yield(a2a.NewArtifactEvent(ec, parts...), nil) {
-			return
-		}
-		yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateCompleted, nil), nil)
+		// Drain unconditionally so text-only sessions don't leak map entries;
+		// only emit A2UI parts when the extension is active.
+		ws, msgs, fs := e.drain(sessionID)
+		emit(finalText, ws, msgs, fs, "llm turn")
 	}
+}
+
+// pendingClient returns the client whose remote agent holds a pending
+// input-required task for the session, so a HITL button resumes the right one.
+// With an explicit selection only that agent is considered.
+func (e *orchExecutor) pendingClient(agentID, sessionID string) *OrdersClient {
+	ids := e.reg.IDs()
+	if agentID != autoAgentID {
+		ids = []string{agentID}
+	}
+	for _, id := range ids {
+		r, ok := e.reg.Get(id)
+		if !ok || r.PendingTaskID(sessionID) == "" {
+			continue
+		}
+		if c, ok := e.reg.ClientFor(id); ok {
+			return c
+		}
+	}
+	return nil
+}
+
+// actionToPrompt renders an A2UI action as a sentence for an agent that speaks
+// plain text only. Our own HITL actions have canonical answers (see
+// actionToText); anything else — e.g. a button a remote agent invented — is
+// described together with its context.
+func actionToPrompt(name string, ctx map[string]any) string {
+	switch name {
+	case "approve_refund", "decline_refund", "submit_refund_details":
+		return actionToText(name, ctx)
+	}
+	label, _ := ctx["label"].(string)
+	if label == "" {
+		label = name
+	}
+	var details []string
+	for k, v := range ctx {
+		if k == "label" {
+			continue
+		}
+		details = append(details, fmt.Sprintf("%s: %v", k, v))
+	}
+	sort.Strings(details)
+	out := fmt.Sprintf("Пользователь нажал кнопку «%s»", label)
+	if len(details) > 0 {
+		out += " (" + strings.Join(details, ", ") + ")"
+	}
+	return out
 }
 
 func (e *orchExecutor) Cancel(_ context.Context, ec *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {
@@ -294,6 +456,28 @@ func (e *orchExecutor) a2uiParts(a2uiActive bool, ws []map[string]any) []*a2a.Pa
 	return parts
 }
 
+// a2uiMessageParts wraps A2UI messages a remote agent authored itself into
+// DataParts. Unlike a2uiParts these need no mapping — they already went through
+// a2ui.Ingest, which normalised whatever dialect the agent used.
+func (e *orchExecutor) a2uiMessageParts(a2uiActive bool, msgs []map[string]any) []*a2a.Part {
+	if !a2uiActive {
+		if len(msgs) > 0 {
+			e.trace.Logf("  A2UI inactive — %d agent message(s) dropped, text-only response", len(msgs))
+		}
+		return nil
+	}
+	parts := make([]*a2a.Part, 0, len(msgs))
+	for _, m := range msgs {
+		part := a2a.NewDataPart(m)
+		part.MediaType = a2ui.MIMEType
+		parts = append(parts, part)
+	}
+	if len(parts) > 0 {
+		e.trace.Logf("  A2UI: %d message(s) from the agent passed through (application/a2ui+json)", len(parts))
+	}
+	return parts
+}
+
 // fileParts passes worker-attached files through as A2A raw parts (attached
 // regardless of A2UI: files are plain protocol parts, not generative UI).
 func fileParts(fs []attachedFile) []*a2a.Part {
@@ -333,6 +517,9 @@ func withExt(ctx context.Context) context.Context {
 type A2UIProbe struct {
 	client    *a2aclient.Client
 	contextID string
+	// AgentID, if set, rides along in the message metadata — the same way the
+	// browser tells the orchestrator which agent the user picked.
+	AgentID string
 }
 
 func NewA2UIProbe(ctx context.Context, url string) (*A2UIProbe, error) {
@@ -354,6 +541,9 @@ func (p *A2UIProbe) send(ctx context.Context, part *a2a.Part) ([]*a2a.Part, erro
 	msg := a2a.NewMessage(a2a.MessageRoleUser, part)
 	if p.contextID != "" {
 		msg.ContextID = p.contextID
+	}
+	if p.AgentID != "" {
+		msg.Metadata = map[string]any{"agentId": p.AgentID}
 	}
 	res, err := p.client.SendMessage(withExt(ctx), &a2a.SendMessageRequest{Message: msg})
 	if err != nil {
