@@ -156,6 +156,40 @@ func hasAny(m map[string]json.RawMessage, keys ...string) bool {
 	return false
 }
 
+// tolerantCardParser разбирает AgentCard, переживая нераспознанные блоки
+// безопасности. a2a-go ждёт их в oneof-форме ({"httpAuth": {...}}), а агенты
+// нередко описывают схемы в стиле OpenAPI ({"type":"http","scheme":"basic"}) —
+// и тогда падает разбор всей карточки. Нам эти блоки не нужны: аутентификацию
+// мы ставим сами из конфига, поэтому при сбое просто выкидываем их и пробуем
+// снова.
+func tolerantCardParser(trace *Tracer) agentcard.Parser {
+	return func(body []byte) (*a2a.AgentCard, error) {
+		card, err := agentcard.DefaultCardParser(body)
+		if err == nil {
+			return card, nil
+		}
+		var raw map[string]json.RawMessage
+		if jsonErr := json.Unmarshal(body, &raw); jsonErr != nil {
+			return nil, err
+		}
+		if _, hasSchemes := raw["securitySchemes"]; !hasSchemes {
+			return nil, err
+		}
+		delete(raw, "securitySchemes")
+		delete(raw, "security")
+		stripped, jsonErr := json.Marshal(raw)
+		if jsonErr != nil {
+			return nil, err
+		}
+		card, retryErr := agentcard.DefaultCardParser(stripped)
+		if retryErr != nil {
+			return nil, err
+		}
+		trace.Logf("    ⚠ карточка объявляет securitySchemes в нераспознанной форме (%v) — игнорирую их, авторизация берётся из конфига", err)
+		return card, nil
+	}
+}
+
 // Remote — одно соединение с одним удалённым A2A-агентом: карточка,
 // аутентификация, сессии и один ход разговора. Знает про особенности чужих
 // агентов (нестандартный путь карточки, нерабочий адрес внутри неё,
@@ -263,7 +297,7 @@ func (r *Remote) Connect(ctx context.Context) error {
 	}
 
 	hc := r.httpClient()
-	resolver := &agentcard.Resolver{Client: hc, CardParser: agentcard.DefaultCardParser}
+	resolver := &agentcard.Resolver{Client: hc, CardParser: tolerantCardParser(r.trace)}
 	card, err := resolver.Resolve(ctx, r.cfg.URL, agentcard.WithPath(r.cfg.CardPath))
 	if err != nil {
 		r.available = false

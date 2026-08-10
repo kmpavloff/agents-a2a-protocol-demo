@@ -194,3 +194,32 @@ func TestIngestIgnoresGarbage(t *testing.T) {
 		}
 	}
 }
+
+// Контекст события по схеме — объект «ключ → значение»; внешний агент шлёт
+// массив пар, на котором рендерер собрал бы бессмысленный контекст.
+func TestIngestNormalisesActionContext(t *testing.T) {
+	comps := []any{
+		map[string]any{"id": "btn", "component": "Button", "child": "lbl",
+			"action": map[string]any{"event": map[string]any{
+				"name":    "return_order",
+				"context": []any{map[string]any{"key": "order_id", "value": "ORD-001"}},
+			}}},
+		map[string]any{"id": "lbl", "component": "Text", "text": "Возврат"},
+	}
+	data := []any{
+		map[string]any{"createSurface": map[string]any{"surfaceId": "s1", "catalogId": CatalogID}},
+		map[string]any{"updateComponents": map[string]any{"surfaceId": "s1", "components": comps}},
+	}
+	msgs := Ingest([]Part{{MediaType: MIMEType, Data: data}})
+	assertRenderable(t, msgs)
+
+	btn := componentsByID(msgs)["btn"]
+	event := btn["action"].(map[string]any)["event"].(map[string]any)
+	ctx, ok := event["context"].(map[string]any)
+	if !ok {
+		t.Fatalf("context is not an object: %#v", event["context"])
+	}
+	if ctx["order_id"] != "ORD-001" {
+		t.Errorf("context: %v", ctx)
+	}
+}

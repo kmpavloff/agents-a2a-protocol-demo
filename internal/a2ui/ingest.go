@@ -215,7 +215,39 @@ func normalizeComponent(c map[string]any, gen *int) []map[string]any {
 	for k, v := range props {
 		out[k] = v
 	}
+	normalizeAction(out)
 	return []map[string]any{out}
+}
+
+// normalizeAction приводит контекст события к объекту: схема A2UI требует
+// «ключ → значение», а агент присылает массив пар {key, value}, на котором
+// рендерер соберёт бессмысленный контекст.
+func normalizeAction(c map[string]any) {
+	action, ok := c["action"].(map[string]any)
+	if !ok {
+		return
+	}
+	event, ok := action["event"].(map[string]any)
+	if !ok {
+		return
+	}
+	pairs, ok := event["context"].([]any)
+	if !ok {
+		return
+	}
+	ctx := make(map[string]any, len(pairs))
+	for _, p := range pairs {
+		pair, ok := p.(map[string]any)
+		if !ok {
+			continue
+		}
+		key, ok := pair["key"].(string)
+		if !ok || key == "" {
+			continue
+		}
+		ctx[key] = pair["value"]
+	}
+	event["context"] = ctx
 }
 
 // normalizeButton приводит кнопку к форме каталога: у него нет свойства label,
@@ -228,6 +260,7 @@ func normalizeButton(id string, props map[string]any) []map[string]any {
 		}
 		btn[k] = v
 	}
+	normalizeAction(btn)
 	if _, hasChild := btn["child"]; hasChild {
 		return []map[string]any{btn}
 	}
