@@ -43,18 +43,25 @@ var basicComponents = map[string]bool{
 // блёклый, но валидный набор компонентов: чужой агент не должен ронять наш UI.
 func Ingest(parts []Part) []map[string]any {
 	var out []map[string]any
-	gen := 0 // счётчик id для компонентов, приехавших без него
+	st := &ingestState{rooted: map[string]bool{}}
 	for _, p := range parts {
 		if p.MediaType != MIMEType {
 			continue
 		}
 		for _, raw := range messagesFrom(p) {
-			if m, ok := normalizeMessage(raw, &gen); ok {
+			if m, ok := normalizeMessage(raw, st); ok {
 				out = append(out, m)
 			}
 		}
 	}
 	return out
+}
+
+// ingestState — состояние одного вызова Ingest: счётчик id для компонентов,
+// приехавших без него, и поверхности, которым корень уже назначен.
+type ingestState struct {
+	gen    int
+	rooted map[string]bool
 }
 
 // messagesFrom разбирает полезную нагрузку части в список сырых A2UI-сообщений,
@@ -88,7 +95,7 @@ func messagesFrom(p Part) []map[string]any {
 
 // normalizeMessage переписывает версию сообщения на нашу и нормализует
 // компоненты. Возвращает ok=false для сообщений неизвестного вида.
-func normalizeMessage(msg map[string]any, gen *int) (map[string]any, bool) {
+func normalizeMessage(msg map[string]any, st *ingestState) (map[string]any, bool) {
 	kind := ""
 	for _, k := range knownMessages {
 		if _, ok := msg[k]; ok {
@@ -118,10 +125,17 @@ func normalizeMessage(msg map[string]any, gen *int) (map[string]any, bool) {
 	}
 	comps := make([]map[string]any, 0, len(raw))
 	for _, c := range raw {
-		comps = append(comps, normalizeComponent(c, gen)...)
+		comps = append(comps, normalizeComponent(c, st)...)
 	}
 	if len(comps) == 0 {
 		return nil, false
+	}
+	// Рендерер строит дерево от компонента с id ровно "root"; без него
+	// поверхность навсегда остаётся в состоянии «Loading surface…». Чужие
+	// агенты называют корень как угодно — назначаем его сами.
+	if surfaceID, _ := payload["surfaceId"].(string); !st.rooted[surfaceID] {
+		comps = ensureRoot(comps)
+		st.rooted[surfaceID] = true
 	}
 	next := make(map[string]any, len(payload))
 	for k, v := range payload {
@@ -175,15 +189,15 @@ func unwrap(c map[string]any) (string, map[string]any) {
 // normalizeComponent превращает один входящий компонент в один или несколько
 // компонентов basic-каталога. Id контейнера всегда сохраняется: на него
 // ссылается children родителя, и потеря id разорвала бы дерево.
-func normalizeComponent(c map[string]any, gen *int) []map[string]any {
+func normalizeComponent(c map[string]any, st *ingestState) []map[string]any {
 	typ, props := unwrap(c)
 	if typ == "" {
 		return nil
 	}
 	id, _ := props["id"].(string)
 	if id == "" {
-		*gen++
-		id = fmt.Sprintf("gen%d", *gen)
+		st.gen++
+		id = fmt.Sprintf("gen%d", st.gen)
 	}
 	delete(props, "id")
 
@@ -331,6 +345,48 @@ func markdownTable(props map[string]any) string {
 		}
 	}
 	return b.String()
+}
+
+// ensureRoot гарантирует, что у набора есть компонент с id "root": рендерер
+// строит дерево именно от него, и без него поверхность навсегда остаётся в
+// состоянии «Loading surface…». Чужие агенты называют корень как угодно,
+// поэтому недостающий корень добавляется отдельной колонкой поверх верхних
+// компонентов — переименовывать чужие id нельзя, на них могут ссылаться
+// последующие обновления той же поверхности.
+func ensureRoot(comps []map[string]any) []map[string]any {
+	referenced := make(map[string]bool, len(comps))
+	for _, c := range comps {
+		if child, ok := c["child"].(string); ok {
+			referenced[child] = true
+		}
+		if children, ok := c["children"].([]any); ok {
+			for _, ch := range children {
+				if name, ok := ch.(string); ok {
+					referenced[name] = true
+				}
+			}
+		}
+	}
+	var tops []any
+	for _, c := range comps {
+		id, _ := c["id"].(string)
+		if id == "root" {
+			return comps // корень уже на месте
+		}
+		if !referenced[id] {
+			tops = append(tops, id)
+		}
+	}
+	if len(tops) == 0 {
+		// Дерево замкнуто само на себя — вешаем корень на первый компонент.
+		if len(comps) == 0 {
+			return comps
+		}
+		first, _ := comps[0]["id"].(string)
+		tops = []any{first}
+	}
+	root := map[string]any{"id": "root", "component": "Column", "children": tops}
+	return append([]map[string]any{root}, comps...)
 }
 
 // unknownDump компактно показывает то, что мы не умеем отрисовать, вместо того

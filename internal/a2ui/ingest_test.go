@@ -43,6 +43,11 @@ func assertRenderable(t *testing.T, msgs []map[string]any) {
 	if !seenUpdate {
 		t.Fatal("no updateComponents message")
 	}
+	// Без компонента с id "root" рендерер не начнёт обход дерева и навсегда
+	// останется в состоянии «Loading surface…».
+	if _, ok := componentsByID(msgs)["root"]; !ok {
+		t.Error("no component with id \"root\": the surface will never render")
+	}
 }
 
 // componentsByID собирает плоский индекс компонентов из всех сообщений.
@@ -221,5 +226,47 @@ func TestIngestNormalisesActionContext(t *testing.T) {
 	}
 	if ctx["order_id"] != "ORD-001" {
 		t.Errorf("context: %v", ctx)
+	}
+}
+
+func TestEnsureRootWrapsForeignTree(t *testing.T) {
+	// Чужой корень называется как угодно — рендереру нужен именно "root".
+	comps := []map[string]any{
+		{"id": "order_card", "component": "Column", "children": []any{"title"}},
+		{"id": "title", "component": "Text", "text": "Заказ"},
+	}
+	got := ensureRoot(comps)
+	root := got[0]
+	if root["id"] != "root" || root["component"] != "Column" {
+		t.Fatalf("root: %v", root)
+	}
+	if children, _ := root["children"].([]any); len(children) != 1 || children[0] != "order_card" {
+		t.Errorf("root children: %v", root["children"])
+	}
+	// Исходные id не трогаем: на них ссылаются последующие обновления.
+	if got[1]["id"] != "order_card" {
+		t.Errorf("original id renamed: %v", got[1])
+	}
+}
+
+func TestEnsureRootKeepsExistingRoot(t *testing.T) {
+	comps := []map[string]any{
+		{"id": "root", "component": "Column", "children": []any{"title"}},
+		{"id": "title", "component": "Text", "text": "Заказ"},
+	}
+	if got := ensureRoot(comps); len(got) != 2 {
+		t.Errorf("existing root must not be wrapped again: %v", got)
+	}
+}
+
+func TestEnsureRootCollectsSeveralTops(t *testing.T) {
+	comps := []map[string]any{
+		{"id": "a", "component": "Text", "text": "раз"},
+		{"id": "b", "component": "Text", "text": "два"},
+	}
+	got := ensureRoot(comps)
+	children, _ := got[0]["children"].([]any)
+	if len(children) != 2 {
+		t.Errorf("both tops must hang under root: %v", got[0])
 	}
 }
