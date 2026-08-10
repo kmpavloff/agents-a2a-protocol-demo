@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func writeTemp(t *testing.T, body string) string {
@@ -70,5 +71,100 @@ func TestLoadOrchestratorValidatesRequired(t *testing.T) {
 	p := writeTemp(t, "worker_url: \"\"\n")
 	if _, err := LoadOrchestrator(p); err == nil {
 		t.Fatal("expected validation error for empty worker_url")
+	}
+}
+
+func TestLoadOrchestratorParsesAgents(t *testing.T) {
+	p := writeTemp(t, `
+agents:
+  - id: orders
+    name: "Агент заказов"
+    url: "http://localhost:8081"
+  - id: ouroboros
+    name: "Ouroboros"
+    url: "http://192.168.1.68:18800"
+    card_path: "/.well-known/agent.json"
+    skill: "shop"
+    verbatim: true
+    timeout: "180s"
+    description: "Заказы магазина."
+    auth: {type: basic, username: ouroboros, password: testpass}
+llm:
+  base_url: "http://localhost:1234/v1"
+`)
+	cfg, err := LoadOrchestrator(p)
+	if err != nil {
+		t.Fatalf("LoadOrchestrator: %v", err)
+	}
+	if len(cfg.Agents) != 2 {
+		t.Fatalf("agents: got %d, want 2", len(cfg.Agents))
+	}
+	if cfg.Agents[0].CardPath != "/.well-known/agent-card.json" {
+		t.Errorf("default card_path: got %q", cfg.Agents[0].CardPath)
+	}
+	if cfg.Agents[0].TimeoutDuration() != 120*time.Second {
+		t.Errorf("default timeout: got %v", cfg.Agents[0].TimeoutDuration())
+	}
+	o := cfg.Agents[1]
+	if o.Skill != "shop" || !o.Verbatim || o.TimeoutDuration() != 180*time.Second {
+		t.Errorf("ouroboros fields: %+v", o)
+	}
+	if o.CardPath != "/.well-known/agent.json" {
+		t.Errorf("card_path: got %q", o.CardPath)
+	}
+	if o.Auth.Type != "basic" || o.Auth.Username != "ouroboros" || o.Auth.Password != "testpass" {
+		t.Errorf("auth: %+v", o.Auth)
+	}
+}
+
+func TestLoadOrchestratorMigratesWorkerURL(t *testing.T) {
+	p := writeTemp(t, "worker_url: \"http://localhost:8081\"\nllm:\n  base_url: \"http://localhost:1234/v1\"\n")
+	cfg, err := LoadOrchestrator(p)
+	if err != nil {
+		t.Fatalf("LoadOrchestrator: %v", err)
+	}
+	if len(cfg.Agents) != 1 || cfg.Agents[0].ID != "orders" || cfg.Agents[0].URL != "http://localhost:8081" {
+		t.Fatalf("migration: %+v", cfg.Agents)
+	}
+	if cfg.Agents[0].CardPath != "/.well-known/agent-card.json" {
+		t.Errorf("migrated card_path: got %q", cfg.Agents[0].CardPath)
+	}
+}
+
+func TestLoadOrchestratorAgentPasswordFromEnv(t *testing.T) {
+	p := writeTemp(t, `
+agents:
+  - id: ouroboros
+    url: "http://192.168.1.68:18800"
+    description: "d"
+    auth: {type: basic, username: ouroboros}
+llm:
+  base_url: "http://localhost:1234/v1"
+`)
+	t.Setenv("A2A_AGENT_OUROBOROS_PASSWORD", "from-env")
+	cfg, err := LoadOrchestrator(p)
+	if err != nil {
+		t.Fatalf("LoadOrchestrator: %v", err)
+	}
+	if cfg.Agents[0].Auth.Password != "from-env" {
+		t.Errorf("password from env: got %q", cfg.Agents[0].Auth.Password)
+	}
+}
+
+func TestLoadOrchestratorRejectsBadAgents(t *testing.T) {
+	cases := map[string]string{
+		"duplicate id": "agents:\n  - {id: a, url: \"http://x\"}\n  - {id: a, url: \"http://y\"}\nllm:\n  base_url: \"http://l\"\n",
+		"bad id":       "agents:\n  - {id: \"Ouro Boros\", url: \"http://x\"}\nllm:\n  base_url: \"http://l\"\n",
+		"empty url":    "agents:\n  - {id: a, url: \"\"}\nllm:\n  base_url: \"http://l\"\n",
+		"bad timeout":  "agents:\n  - {id: a, url: \"http://x\", timeout: \"soon\"}\nllm:\n  base_url: \"http://l\"\n",
+		"bad auth":     "agents:\n  - {id: a, url: \"http://x\", auth: {type: oauth}}\nllm:\n  base_url: \"http://l\"\n",
+		"no agents":    "llm:\n  base_url: \"http://l\"\n",
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := LoadOrchestrator(writeTemp(t, body)); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
 	}
 }

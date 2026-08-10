@@ -4,6 +4,9 @@ package config
 import (
 	"fmt"
 	"os"
+	"regexp"
+	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -25,12 +28,107 @@ type WorkerConfig struct {
 	LLM           LLMConfig `yaml:"llm"`
 }
 
+// AuthConfig описывает, как аутентифицироваться у удалённого агента.
+// Поддерживается только HTTP Basic: встроенный a2aclient.AuthInterceptor умеет
+// лишь Bearer, поэтому Basic ставится своим RoundTripper'ом (см. a2abridge).
+type AuthConfig struct {
+	Type     string `yaml:"type"` // "" или "basic"
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+}
+
+// AgentConfig — один удалённый A2A-агент, с которым умеет говорить оркестратор.
+type AgentConfig struct {
+	ID   string `yaml:"id"`
+	Name string `yaml:"name"` // подпись в селекторе UI; пусто → имя из AgentCard
+	URL  string `yaml:"url"`  // вытесняет адрес, объявленный в самой карточке
+	// CardPath — путь к AgentCard: не все агенты кладут её в канонический
+	// /.well-known/agent-card.json.
+	CardPath string `yaml:"card_path"`
+	// Skill уезжает в metadata.skill каждого сообщения — так внешний агент
+	// понимает, какой набор инструментов включать.
+	Skill string `yaml:"skill"`
+	// Verbatim: при явном выборе этого агента в UI его ответ уходит в браузер
+	// без локальной LLM — ни пересказа, ни лишней латентности.
+	Verbatim bool   `yaml:"verbatim"`
+	Timeout  string `yaml:"timeout"` // таймаут SendMessage, напр. "180s"
+	// Description вытесняет вывод из AgentCard: у агента может быть сотня
+	// навыков, и промпт локальной модели такого не переживёт.
+	Description string     `yaml:"description"`
+	Auth        AuthConfig `yaml:"auth"`
+}
+
+const (
+	defaultCardPath     = "/.well-known/agent-card.json"
+	defaultAgentTimeout = 120 * time.Second
+)
+
+// TimeoutDuration возвращает таймаут SendMessage, подставляя значение по
+// умолчанию. Разбираемость строки уже проверена при загрузке конфига.
+func (a AgentConfig) TimeoutDuration() time.Duration {
+	if a.Timeout == "" {
+		return defaultAgentTimeout
+	}
+	d, err := time.ParseDuration(a.Timeout)
+	if err != nil || d <= 0 {
+		return defaultAgentTimeout
+	}
+	return d
+}
+
 type OrchestratorConfig struct {
-	ListenAddr string    `yaml:"listen_addr"` // used only in --web mode
-	PublicURL  string    `yaml:"public_url"`  // used only in --web mode
-	WorkerURL  string    `yaml:"worker_url"`
-	A2ALogPath string    `yaml:"a2a_log_path"` // file for A2A protocol trace; empty disables
-	LLM        LLMConfig `yaml:"llm"`
+	ListenAddr string `yaml:"listen_addr"` // used only in --web mode
+	PublicURL  string `yaml:"public_url"`  // used only in --web mode
+	// WorkerURL — исторический одиночный агент. Сохранён ради совместимости:
+	// если agents: пуст, из него синтезируется единственная запись.
+	WorkerURL  string        `yaml:"worker_url"`
+	Agents     []AgentConfig `yaml:"agents"`
+	A2ALogPath string        `yaml:"a2a_log_path"` // file for A2A protocol trace; empty disables
+	LLM        LLMConfig     `yaml:"llm"`
+}
+
+var agentIDRe = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+
+// envAgentPassword — имя переменной окружения с паролем агента, чтобы секрет
+// можно было держать вне файла конфигурации.
+func envAgentPassword(id string) string {
+	return "A2A_AGENT_" + strings.ToUpper(strings.ReplaceAll(id, "-", "_")) + "_PASSWORD"
+}
+
+// applyAgentDefaults подставляет умолчания и env-перекрытия, затем валидирует
+// список агентов.
+func applyAgentDefaults(agents []AgentConfig) error {
+	seen := make(map[string]bool, len(agents))
+	for i := range agents {
+		a := &agents[i]
+		if !agentIDRe.MatchString(a.ID) {
+			return fmt.Errorf("orchestrator config: agent id %q must match %s", a.ID, agentIDRe)
+		}
+		if seen[a.ID] {
+			return fmt.Errorf("orchestrator config: duplicate agent id %q", a.ID)
+		}
+		seen[a.ID] = true
+		if a.URL == "" {
+			return fmt.Errorf("orchestrator config: agent %q: url is required", a.ID)
+		}
+		if a.CardPath == "" {
+			a.CardPath = defaultCardPath
+		}
+		if a.Timeout != "" {
+			if d, err := time.ParseDuration(a.Timeout); err != nil || d <= 0 {
+				return fmt.Errorf("orchestrator config: agent %q: bad timeout %q", a.ID, a.Timeout)
+			}
+		}
+		switch a.Auth.Type {
+		case "", "basic":
+		default:
+			return fmt.Errorf("orchestrator config: agent %q: unsupported auth type %q", a.ID, a.Auth.Type)
+		}
+		if p := os.Getenv(envAgentPassword(a.ID)); p != "" {
+			a.Auth.Password = p
+		}
+	}
+	return nil
 }
 
 func env(key, cur string) string {
@@ -93,8 +191,15 @@ func LoadOrchestrator(path string) (OrchestratorConfig, error) {
 		c.PublicURL = "http://localhost:8080"
 	}
 	c.LLM.applyEnv()
-	if c.WorkerURL == "" {
-		return c, fmt.Errorf("orchestrator config: worker_url is required")
+	// Совместимость: одиночный worker_url становится единственным агентом.
+	if len(c.Agents) == 0 && c.WorkerURL != "" {
+		c.Agents = []AgentConfig{{ID: "orders", Name: "Агент заказов", URL: c.WorkerURL}}
+	}
+	if len(c.Agents) == 0 {
+		return c, fmt.Errorf("orchestrator config: at least one agent (agents: or worker_url:) is required")
+	}
+	if err := applyAgentDefaults(c.Agents); err != nil {
+		return c, err
 	}
 	if c.LLM.BaseURL == "" {
 		return c, fmt.Errorf("orchestrator config: llm.base_url is required")
