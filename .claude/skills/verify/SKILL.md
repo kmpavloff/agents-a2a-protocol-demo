@@ -1,6 +1,6 @@
 ---
 name: verify
-description: Build, launch and drive the A2A orders demo (Go and/or Java agents) to verify changes end-to-end without needing a browser.
+description: Build, launch and drive the A2A orders demo (Go and/or Java agents) to verify changes end-to-end — headlessly over JSON-RPC, plus a screenshot recipe for the parts only a browser can prove.
 ---
 
 # Verifying the A2A orders demo
@@ -68,6 +68,81 @@ point the agents at it with `LLM_BASE_URL=http://127.0.0.1:<port>/v1`.
 - error probes: unknown order 9999, non-refundable 1055
 - worker-side trace: worker prints `[A2A worker]` lines to stdout; the
   orchestrator's trace goes to `a2a-orchestrator.log` (path: `a2a_log_path`)
+
+## Screenshot check (when JSON is not enough)
+
+The JSON-RPC path above proves the wire format, **not** that the browser
+renders anything. Some failures are invisible to it: a widget whose component
+tree the renderer refuses to walk still arrives as perfectly valid
+`application/a2ui+json`. Take a screenshot whenever the change touches A2UI
+generation/ingestion, the agent selector, or anything else visual.
+
+Chromium binaries usually already live in `~/.cache/ms-playwright`; the driver
+does not. Install it **outside the repo** so nothing lands in `web/package.json`:
+
+```bash
+SHOT=$(mktemp -d)
+cd "$SHOT" && npm init -y >/dev/null && npm install playwright-core
+# no browsers in the cache? npx playwright install chromium
+```
+
+Driver skeleton (adjust the prompt and the agent):
+
+```js
+import {chromium} from 'playwright-core';
+const browser = await chromium.launch({
+  executablePath: process.env.HOME + '/.cache/ms-playwright/chromium-1217/chrome-linux64/chrome',
+  args: ['--no-sandbox'],
+});
+const page = await browser.newPage({viewport: {width: 900, height: 1000}});
+const errors = [];
+page.on('pageerror', (e) => errors.push('pageerror: ' + e));
+page.on('console', (m) => m.type() === 'error' && errors.push('console: ' + m.text()));
+
+await page.goto('http://localhost:8080', {waitUntil: 'networkidle'});
+// EVERYTHING lives in the shadow root of <orders-app>; plain selectors miss it.
+await page.waitForFunction(
+  () => document.querySelector('orders-app')?.shadowRoot?.querySelector('#agent'),
+  null, {timeout: 15000},
+);
+await page.evaluate(() => {
+  const root = document.querySelector('orders-app').shadowRoot;
+  const sel = root.querySelector('#agent');       // agent selector: auto | <id>
+  sel.value = 'ouroboros';
+  sel.dispatchEvent(new Event('change', {bubbles: true}));
+  root.querySelector('input').value = 'покажи статус заказа ORD-001';
+  root.querySelector('form').dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}));
+});
+await page.waitForFunction(
+  () => document.querySelector('orders-app').shadowRoot.querySelector('.widget a2ui-surface'),
+  null, {timeout: 180000},                        // a remote agent turn can take ~1 min
+);
+await page.waitForTimeout(1200);                  // let the surface paint
+await page.screenshot({path: 'widget.png', fullPage: true});
+console.log('ERRORS:', errors.length ? errors.join('\n') : 'none');
+await browser.close();
+```
+
+**Then look at the image.** The checks that matter are visual:
+
+- `Loading surface…` inside the widget frame = the component tree has no
+  component with id exactly `root`. `@a2ui/lit` starts its walk there
+  (`a2ui-surface.js:125`), so a tree rooted at any other id renders nothing.
+  `a2ui.Ingest` adds the missing root; if this reappears, that is where to look.
+- An empty widget frame, or plain text where a card belongs, means the A2UI
+  never reached the renderer — check `A2A-Extensions` negotiation in the trace.
+- `console --errors` equivalent: the `errors` array above must print `none`.
+
+Driver gotchas:
+
+- `page.waitForFunction(fn, arg, options)` — the timeout is the **third**
+  argument. Passing `{timeout: …}` second silently keeps the 30 s default.
+- Shadow DOM: `page.click('button')` will not find anything; go through
+  `orders-app.shadowRoot` inside `page.evaluate`.
+- A `<select>` popup does not render headlessly. Read `sel.options` for the
+  list and set `sel.value` + dispatch `change` to switch agents.
+
+Clean up the temp dir when done; never commit the driver or `node_modules`.
 
 ## Gotchas
 
