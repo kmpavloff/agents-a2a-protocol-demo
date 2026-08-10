@@ -31,6 +31,12 @@ What is ported:
   (`approve_refund`/`decline_refund` resume the pending worker task directly,
   bypassing the LLM), and serves the browser frontend.
 
+A second difference: the multi-agent support added to the Go orchestrator
+(a list of remote agents in the config plus the agent selector in the browser —
+see [«Several agents at once»](../README.md#several-agents-at-once)) is **not**
+ported here. The Java orchestrator still talks to exactly one worker via
+`worker_url`.
+
 One difference from Go: the jar does **not** embed the frontend build. At
 startup the web mode looks for it on disk — `$WEBUI_DIST`, then
 `internal/webui/dist`, then `web/dist` (relative to the working directory) —

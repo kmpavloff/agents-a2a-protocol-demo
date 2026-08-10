@@ -151,6 +151,7 @@ environment variable (handy for CI or for keeping the key out of files entirely)
 | `LLM_API_KEY` | `lm-studio` | API key (any non-empty string works) |
 | `WORKER_DATA_PATH` | `data/orders.json` | Path to the seed orders file |
 | `ORDER_LINK_BASE` | `https://shop.example.com/orders` | Base URL for order-card links in widgets (`<base>/<id>`) |
+| `A2A_AGENT_<ID>_PASSWORD` | — | Basic-auth password for the agent with that `id` (e.g. `A2A_AGENT_OUROBOROS_PASSWORD`), so the secret can stay out of the config file |
 
 > **WSL2 + LM Studio on Windows.** If you run the agents inside WSL2 while LM Studio
 > runs on the Windows host, `http://localhost:1234` usually does **not** reach it
@@ -272,6 +273,74 @@ connection, and the flag is the only difference.
 > catalog of known components from that data — it does not execute arbitrary
 > code — but a production deployment would still want a strict CSP and
 > additional payload sanitization before treating an agent as fully trusted.
+
+---
+
+## Several agents at once
+
+The orchestrator is not limited to a single worker. `configs/orchestrator.yaml`
+takes a **list** of remote A2A agents, and in web mode a selector above the chat
+picks which one answers:
+
+```yaml
+agents:
+  - id: orders
+    name: "Агент заказов"
+    url: "http://localhost:8081"
+
+  - id: ouroboros
+    name: "Ouroboros · магазин"
+    url: "http://192.168.1.68:18800"
+    card_path: "/.well-known/agent.json"   # card outside the canonical path
+    skill: "shop"                          # rides in metadata.skill
+    verbatim: true                         # answer bypasses the local LLM
+    timeout: "180s"
+    description: "Заказы интернет-магазина: статус, детали, возвраты."
+    auth: {type: basic, username: ouroboros, password: testpass}
+```
+
+Three modes, chosen by what the user picks in the selector:
+
+| Selection | What happens |
+|---|---|
+| **Авто** | The orchestrator LLM gets a delegating tool per available agent and routes the request itself |
+| An agent, `verbatim: false` | The LLM runs with exactly that agent's tool — useful when the agent needs the orchestrator's HITL handling |
+| An agent, `verbatim: true` | No local LLM at all: the agent's text and A2UI go straight to the browser |
+
+Each agent keeps its own `contextId` per browser session, so switching back and
+forth does not break either conversation. An agent that is down does not stop
+the orchestrator from starting: it is listed as unavailable, contributes no
+tool, and reconnects on the next request.
+
+**Compatibility.** Real-world agents diverge from the spec in small ways, and
+the gateway absorbs that rather than failing:
+
+- the AgentCard may live at a different path (`card_path`) and advertise an
+  unroutable address (`http://0.0.0.0:…`) — only the scheme and host are taken
+  from the config, the path from the card;
+- `securitySchemes` may be written OpenAPI-style instead of the A2A oneof form,
+  which `a2a-go` refuses to parse — those blocks are dropped (authentication
+  comes from the config anyway);
+- `SendMessage` may answer with a bare task object instead of the A2A 1.0
+  `{"task": …}` oneof envelope — it is wrapped on the fly;
+- A2UI may arrive as a text part instead of a `DataPart`, with components in a
+  wrapper form and types outside the catalog the agent itself declares
+  (`Heading`, `Callout`, `Metric`, `Table`) — `a2ui.Ingest` normalises all of it
+  into the basic v0.9 catalog, degrading a `Table` into a markdown table rather
+  than dropping it.
+
+Each of these is traced, so the protocol log shows exactly which allowance was
+applied. To check the chain against a real agent:
+
+```bash
+LIVE_AGENT_URL=http://192.168.1.68:18800 \
+LIVE_AGENT_CARD_PATH=/.well-known/agent.json \
+LIVE_AGENT_SKILL=shop \
+LIVE_AGENT_USER=ouroboros LIVE_AGENT_PASSWORD=testpass \
+go test ./internal/a2abridge/ -run TestLiveRemoteAgent -v -timeout 300s
+```
+
+Without `LIVE_AGENT_URL` that test skips, so the normal suite stays offline.
 
 ---
 

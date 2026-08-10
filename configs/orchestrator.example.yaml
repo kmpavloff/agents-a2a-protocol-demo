@@ -6,13 +6,54 @@
 # The real `configs/orchestrator.yaml` is gitignored because it holds your API key.
 # Env-var overrides (see internal/config): ORCHESTRATOR_LISTEN_ADDR,
 # ORCHESTRATOR_PUBLIC_URL, WORKER_URL, A2A_LOG_PATH, LLM_BASE_URL, LLM_MODEL,
-# LLM_API_KEY.
+# LLM_API_KEY, A2A_AGENT_<ID>_PASSWORD.
 #
 # listen_addr/public_url are used only in --web mode (A2A server + embedded frontend).
 listen_addr: ":8080"
 public_url: "http://localhost:8080"
+
+# Remote A2A agents the orchestrator can delegate to. In --web mode the browser
+# shows them in a selector ("Авто" plus each agent by name); the terminal REPL
+# has no selector and always talks to the FIRST agent in this list.
+#
+# Only `id` and `url` are required. Everything else exists for agents that do
+# not behave exactly like our own worker.
+agents:
+  - id: orders
+    name: "Агент заказов"
+    url: "http://localhost:8081"
+
+  # Пример внешнего агента в локальной сети. Закомментирован: без запущенного
+  # агента он просто отображается в селекторе как недоступный.
+  #
+  # - id: ouroboros
+  #   name: "Ouroboros · магазин"
+  #   url: "http://192.168.1.68:18800"
+  #   # Карточка не по каноническому пути /.well-known/agent-card.json.
+  #   card_path: "/.well-known/agent.json"
+  #   # Уезжает в metadata.skill каждого сообщения: так агент понимает, какой
+  #   # набор инструментов включить.
+  #   skill: "shop"
+  #   # Ответ такого агента уходит в браузер как есть, без локальной модели:
+  #   # пересказывать уже готовый ответ незачем, а задержку это экономит.
+  #   verbatim: true
+  #   # У агента ~50 секунд на ход, дефолтных 120s хватает не всегда.
+  #   timeout: "180s"
+  #   # ОБЯЗАТЕЛЬНО для агентов с большим числом навыков: описание вытесняет
+  #   # вывод из AgentCard (иначе сотня навыков утопит промпт), а имя
+  #   # делегирующего инструмента становится ask_<id>.
+  #   description: "Заказы интернет-магазина: статус, детали, возвраты."
+  #   auth:
+  #     type: basic
+  #     username: ouroboros
+  #     # Пароль можно не хранить в файле: A2A_AGENT_OUROBOROS_PASSWORD=...
+  #     password: testpass
+
+# Исторический одиночный агент. Оставлен ради совместимости: если список
+# `agents` пуст, из worker_url синтезируется единственная запись `orders`.
 worker_url: "http://localhost:8081"
-# File for the A2A protocol trace (how the orchestrator calls the worker).
+
+# File for the A2A protocol trace (how the orchestrator calls the agents).
 # Kept off stdout so it does not clutter the REPL. Override with A2A_LOG_PATH.
 a2a_log_path: "a2a-orchestrator.log"
 llm:
