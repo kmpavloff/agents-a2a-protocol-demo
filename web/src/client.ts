@@ -98,6 +98,14 @@ export class A2UIClient {
     this.#agentId = id || 'auto';
   }
 
+  /**
+   * Забывает contextId, поэтому следующее сообщение начнёт новый разговор:
+   * и у оркестратора (новая сессия), и у удалённого агента (новый контекст).
+   */
+  resetContext() {
+    this.#contextId = undefined;
+  }
+
   async #getClient(): Promise<Client> {
     if (!this.#client) {
       const base = this.#baseUrl || location.origin;

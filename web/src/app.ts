@@ -103,18 +103,41 @@ export class OrdersApp extends LitElement {
 
   // The processor renders A2UI surfaces and routes button clicks back to the
   // agent. Each created surface becomes a widget item in the feed, in order.
-  #processor = new MessageProcessor([basicCatalog], async (action: any) => {
+  #processor = this.#makeProcessor();
+
+  #makeProcessor() {
+    return new MessageProcessor([basicCatalog], async (action: any) => {
     // Consume the widget that owned the clicked button (A2UI never sends
     // deleteSurface here), and echo the button's human label, not its raw
     // action name.
     this._items = this._items.filter(
       (it) => !(it.kind === 'widget' && it.surface?.id === action.surfaceId),
     );
-    const label = (action.context?.label as string) || action.name;
-    await this.#turn(label, () =>
-      this.#client.sendAction(action.name, action.context ?? {}),
-    );
-  });
+      const label = (action.context?.label as string) || action.name;
+      await this.#turn(label, () =>
+        this.#client.sendAction(action.name, action.context ?? {}),
+      );
+    });
+  }
+
+  // Начать заново: пустая лента, новый контекст у оркестратора и у агента,
+  // чистый реестр поверхностей. Нужно, когда агент потерял нить разговора —
+  // до этого помогала только перезагрузка страницы.
+  #newConversation() {
+    if (this._busy) return;
+    this._items = [];
+    this.#client.resetContext();
+    this.#processor = this.#makeProcessor();
+    this.#watchSurfaces();
+  }
+
+  // Подписка на созданные поверхности; вызывается заново для каждого
+  // процессора.
+  #watchSurfaces() {
+    this.#processor.onSurfaceCreated((s: any) => {
+      this._items = [...this._items, {kind: 'widget', surface: s}];
+    });
+  }
 
   @state() private _items: Item[] = [];
   @state() private _busy = false;
@@ -133,9 +156,7 @@ export class OrdersApp extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
-    this.#processor.onSurfaceCreated((s: any) => {
-      this._items = [...this._items, {kind: 'widget', surface: s}];
-    });
+    this.#watchSurfaces();
     onA2ATraffic((e) => {
       this._traffic = [...this._traffic, e];
     });
@@ -280,6 +301,19 @@ export class OrdersApp extends LitElement {
     .agent-note {
       font-size: 12px;
       color: #8b949e;
+    }
+    .new-chat {
+      margin-left: auto;
+      padding: 6px 12px;
+      border-radius: 8px;
+      border: 1px solid #d0d7de;
+      background: #fff;
+      color: #57606a;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .new-chat:hover:not([disabled]) {
+      background: #f6f8fa;
     }
     .feed {
       display: flex;
@@ -535,6 +569,15 @@ export class OrdersApp extends LitElement {
                   список агентов недоступен (${this._agentsError})
                 </span>`
               : nothing}
+            <button
+              type="button"
+              class="new-chat"
+              ?disabled=${this._busy || !this._items.length}
+              title="Забыть разговор: следующий запрос уйдёт с новым контекстом"
+              @click=${() => this.#newConversation()}
+            >
+              Новый разговор
+            </button>
           </div>`}
       <div class="feed">
         ${this._items.map((it) => this.#renderItem(it))}
