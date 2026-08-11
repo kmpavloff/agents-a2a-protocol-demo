@@ -10,6 +10,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
+
+	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/a2ui"
 	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/config"
 	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/llm"
 )
@@ -347,5 +350,21 @@ func TestRemoteSkipsA2UIRequestForPlainAgent(t *testing.T) {
 	}
 	if r.acceptsA2UI() {
 		t.Error("worker card does not advertise A2UI, must not be asked for it")
+	}
+}
+
+// A2UI приезжает и текстовой частью с mediaType application/a2ui+json. Такая
+// часть не должна попасть в текст ответа: пользователь увидел бы JSON, а в
+// режиме «Авто» его же получила бы модель как результат инструмента.
+func TestFirstProseTextSkipsA2UI(t *testing.T) {
+	a2uiPart := a2a.NewTextPart(`[{"createSurface":{}}]`)
+	a2uiPart.MediaType = a2ui.MIMEType
+	prose := a2a.NewTextPart("Заказ доставлен")
+
+	if got := firstProseText([]*a2a.Part{a2uiPart, prose}); got != "Заказ доставлен" {
+		t.Errorf("A2UI-часть просочилась в текст: %q", got)
+	}
+	if got := firstProseText([]*a2a.Part{a2uiPart}); got != "" {
+		t.Errorf("без человекочитаемой части текста быть не должно: %q", got)
 	}
 }

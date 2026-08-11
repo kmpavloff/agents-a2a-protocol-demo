@@ -2,6 +2,7 @@ package a2abridge
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -21,6 +22,12 @@ type AgentInfo struct {
 	// нельзя показывать домысел как факт.
 	Probed bool `json:"probed"`
 }
+
+// connectTimeout — предел на подключение прямо в ходе разговора. Щедрее, чем
+// нужно живому агенту (карточка отвечает до ~15 с), но конечный: без него
+// выключенный агент в локальной сети подвешивал бы каждый ход режима «Авто» на
+// свой таймаут, минутами, ещё до того как заговорит локальная модель.
+const connectTimeout = 20 * time.Second
 
 // probeTimeout — предел на фоновую проверку доступности. Щедрый: карточка у
 // занятого агента отвечает и по десять секунд, и торопливый предел объявил бы
@@ -122,7 +129,7 @@ func (g *Registry) Tools(ctx context.Context) []tool.Tool {
 		if !ok {
 			continue
 		}
-		if err := r.Connect(ctx); err != nil {
+		if err := g.ready(ctx, r); err != nil {
 			g.trace.Logf("agent %q unavailable, skipping its tool: %v", id, err)
 			continue
 		}
@@ -130,6 +137,11 @@ func (g *Registry) Tools(ctx context.Context) []tool.Tool {
 		// разрешаем детерминированно, в порядке конфига.
 		if name := r.Profile().ToolName; seen[name] {
 			fallback := defaultToolName(id)
+			// Запасное имя тоже может быть занято — id одного агента совпадает
+			// с выведенным из карточки именем другого. Добираем суффиксом.
+			for n := 2; seen[fallback]; n++ {
+				fallback = fmt.Sprintf("%s_%d", defaultToolName(id), n)
+			}
 			g.trace.Logf("⚠ tool name %q is already taken — renaming agent %q tool to %q", name, id, fallback)
 			r.SetToolName(fallback)
 		}
@@ -152,7 +164,7 @@ func (g *Registry) Summaries(ctx context.Context) []string {
 		if !ok {
 			continue
 		}
-		if err := r.Connect(ctx); err != nil {
+		if err := g.ready(ctx, r); err != nil {
 			continue
 		}
 		if s := r.Profile().Summary; s != "" {
@@ -160,6 +172,23 @@ func (g *Registry) Summaries(ctx context.Context) []string {
 		}
 	}
 	return out
+}
+
+// ready готовит агента к участию в ходе. Уже подключённый проходит мгновенно;
+// заведомо лежащий (проверяли — не ответил) пропускается сразу, а его
+// возвращение к жизни заметит фоновая проверка из List. Остальным даётся
+// ограниченная попытка подключиться.
+func (g *Registry) ready(ctx context.Context, r *Remote) error {
+	if r.Available() {
+		return nil
+	}
+	if r.Probed() {
+		g.probeAsync(r)
+		return fmt.Errorf("agent %q is not responding", r.ID())
+	}
+	ctx, cancel := context.WithTimeout(ctx, connectTimeout)
+	defer cancel()
+	return r.Connect(ctx)
 }
 
 // probeAsync проверяет доступность агента в фоне, по одной проверке на агента

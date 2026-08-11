@@ -74,9 +74,10 @@ function describeTurnError(err: unknown): string {
 /** Длительность хода: «52,3 с» / «1 мин 04 с». */
 function formatDuration(seconds: number): string {
   if (seconds < 60) return `${seconds.toFixed(1).replace('.', ',')} с`;
-  const m = Math.floor(seconds / 60);
-  const rest = Math.round(seconds - m * 60);
-  return `${m} мин ${String(rest).padStart(2, '0')} с`;
+  // Округляем целое число секунд ДО деления: иначе 119,6 с даёт «1 мин 60 с».
+  const total = Math.round(seconds);
+  const m = Math.floor(total / 60);
+  return `${m} мин ${String(total % 60).padStart(2, '0')} с`;
 }
 
 /** One selectable agent, as served by GET /api/agents. */
@@ -110,6 +111,9 @@ export class OrdersApp extends LitElement {
 
   #makeProcessor() {
     return new MessageProcessor([basicCatalog], async (action: any) => {
+      // Ход уже идёт — просто игнорируем клик. Иначе карточка исчезала бы из
+      // ленты (её убирает строка ниже), а запрос всё равно не уходил бы.
+      if (this._busy) return;
     // Consume the widget that owned the clicked button (A2UI never sends
     // deleteSurface here), and echo the button's human label, not its raw
     // action name.

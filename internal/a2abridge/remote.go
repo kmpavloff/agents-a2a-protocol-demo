@@ -550,7 +550,7 @@ func (r *Remote) Ask(ctx context.Context, sessionID, text string) (Reply, error)
 		return r.replyFromParts(v.Parts, ""), nil
 
 	case *a2a.Task:
-		task, err := r.awaitTerminal(ctx, v)
+		task, err := r.awaitTerminal(ctx, client, v)
 		if err != nil {
 			return Reply{}, err
 		}
@@ -564,7 +564,9 @@ func (r *Remote) Ask(ctx context.Context, sessionID, text string) (Reply, error)
 
 // awaitTerminal опрашивает GetTask, пока задача не выйдет из рабочего
 // состояния. Контракт внешнего агента прямо предписывает такой поллинг.
-func (r *Remote) awaitTerminal(ctx context.Context, task *a2a.Task) (*a2a.Task, error) {
+// client передаётся снимком: markUnavailable из параллельного хода зануляет
+// r.client, и чтение поля прямо здесь было бы гонкой с разыменованием nil.
+func (r *Remote) awaitTerminal(ctx context.Context, client *a2aclient.Client, task *a2a.Task) (*a2a.Task, error) {
 	for {
 		state := task.Status.State
 		if state != a2a.TaskStateWorking && state != a2a.TaskStateSubmitted {
@@ -576,7 +578,7 @@ func (r *Remote) awaitTerminal(ctx context.Context, task *a2a.Task) (*a2a.Task, 
 			return nil, fmt.Errorf("agent %q: task %s still %s: %w", r.cfg.ID, task.ID, state, ctx.Err())
 		case <-time.After(pollInterval):
 		}
-		next, err := r.client.GetTask(ctx, &a2a.GetTaskRequest{ID: task.ID})
+		next, err := client.GetTask(ctx, &a2a.GetTaskRequest{ID: task.ID})
 		if err != nil {
 			return nil, fmt.Errorf("agent %q: GetTask %s: %w", r.cfg.ID, task.ID, err)
 		}
@@ -609,13 +611,12 @@ func (r *Remote) replyFromTask(sessionID string, task *a2a.Task) Reply {
 
 	// Текст берём из статусного сообщения, если агент положил его туда
 	// (так предписывает контракт), иначе — из артефакта, как делает наш воркер.
+	// Части с mediaType A2UI пропускаем: агент вполне может прислать разметку
+	// интерфейса текстовой частью, и она не должна стать ответом пользователю.
 	fallback := taskResultText(task)
 	if task.Status.Message != nil {
-		for _, p := range task.Status.Message.Parts {
-			if txt := p.Text(); txt != "" {
-				fallback = txt
-				break
-			}
+		if txt := firstProseText(task.Status.Message.Parts); txt != "" {
+			fallback = txt
 		}
 	}
 	parts := append(append([]*a2a.Part{}, artifactParts(task)...), statusParts(task)...)
@@ -724,11 +725,28 @@ func firstWidget(parts []*a2a.Part) map[string]any {
 	return nil
 }
 
+// firstProseText возвращает первую человекочитаемую текстовую часть, пропуская
+// разметку интерфейса: A2UI приезжает и текстовой частью с mediaType
+// application/a2ui+json, и показывать её пользователю нельзя.
+func firstProseText(parts []*a2a.Part) string {
+	for _, p := range parts {
+		if p == nil || p.MediaType == a2ui.MIMEType {
+			continue
+		}
+		if txt := p.Text(); txt != "" {
+			return txt
+		}
+	}
+	return ""
+}
+
 // statusMessageText extracts the question text from an input-required task's
 // status message.
 func statusMessageText(t *a2a.Task) string {
-	if t.Status.Message != nil && len(t.Status.Message.Parts) > 0 {
-		return t.Status.Message.Parts[0].Text()
+	if t.Status.Message != nil {
+		if txt := firstProseText(t.Status.Message.Parts); txt != "" {
+			return txt
+		}
 	}
 	return "Агенту по заказам нужны дополнительные данные."
 }
@@ -739,19 +757,13 @@ func statusMessageText(t *a2a.Task) string {
 // "Done." fallback rather than returning an empty string.
 func taskResultText(t *a2a.Task) string {
 	if len(t.Artifacts) > 0 {
-		last := t.Artifacts[len(t.Artifacts)-1]
-		for _, p := range last.Parts {
-			if txt := p.Text(); txt != "" {
-				return txt
-			}
+		if txt := firstProseText(t.Artifacts[len(t.Artifacts)-1].Parts); txt != "" {
+			return txt
 		}
 	}
 	if len(t.History) > 0 {
-		last := t.History[len(t.History)-1]
-		for _, p := range last.Parts {
-			if txt := p.Text(); txt != "" {
-				return txt
-			}
+		if txt := firstProseText(t.History[len(t.History)-1].Parts); txt != "" {
+			return txt
 		}
 	}
 	return "Готово."

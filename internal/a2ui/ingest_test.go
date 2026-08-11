@@ -321,3 +321,15 @@ func TestIngestAddsButtonLabelToActionContext(t *testing.T) {
 		t.Errorf("исходный контекст потерян: %v", ctx)
 	}
 }
+
+// Агент может прислать разметку интерфейса текстовой частью — она не должна
+// стать ответом пользователю (и уж тем более уехать в LLM как результат).
+func TestIngestSourceTextIsNotProse(t *testing.T) {
+	// Проверка косвенная: Ingest забирает такую часть себе, значит текстовый
+	// слой обязан её пропустить — см. firstProseText в a2abridge.
+	parts := []Part{{MediaType: MIMEType, Text: `[{"createSurface":{"surfaceId":"s","catalogId":"` + CatalogID + `"}},
+		{"updateComponents":{"surfaceId":"s","components":[{"id":"root","component":"Text","text":"x"}]}}]`}}
+	if got := Ingest(parts); len(got) != 2 {
+		t.Fatalf("A2UI из текстовой части не распознан: %v", got)
+	}
+}

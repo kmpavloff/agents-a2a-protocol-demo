@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -42,8 +43,12 @@ type orchExecutor struct {
 	build RunnerBuilder
 	trace *Tracer
 
+	// surfaceSeq разводит поверхности разных ходов. Сквозной, а не по сессиям:
+	// нужна лишь уникальность в пределах страницы, а карта по сессиям росла бы
+	// без конца — «конца сессии» в протоколе нет.
+	surfaceSeq atomic.Uint64
+
 	mu      sync.Mutex
-	turns   map[string]int              // sessionID → номер хода
 	runners map[string]*runner.Runner   // agentId (или "auto") → runner
 	widgets map[string][]map[string]any // sessionID → widgets produced this turn
 	a2uis   map[string][]map[string]any // sessionID → A2UI messages produced this turn
@@ -59,7 +64,6 @@ func NewOrchestratorExecutor(reg *Registry, build RunnerBuilder, trace *Tracer) 
 		reg:     reg,
 		build:   build,
 		trace:   trace,
-		turns:   make(map[string]int),
 		runners: make(map[string]*runner.Runner),
 		widgets: make(map[string][]map[string]any),
 		a2uis:   make(map[string][]map[string]any),
@@ -172,15 +176,12 @@ func (e *orchExecutor) runnerFor(ctx context.Context, agentID string) (*runner.R
 	return r, nil
 }
 
-// nextTurn возвращает номер очередного хода сессии. Он превращается в суффикс
+// nextTurn возвращает номер очередного хода. Он превращается в суффикс
 // surfaceId: агент выводит id поверхности из контекста, который живёт всю
 // сессию, и без разведения второй ход роняет рендерер «Surface … already
 // exists».
-func (e *orchExecutor) nextTurn(sessionID string) int {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.turns[sessionID]++
-	return e.turns[sessionID]
+func (e *orchExecutor) nextTurn() int {
+	return int(e.surfaceSeq.Add(1))
 }
 
 // drain takes everything collected for the session during this turn.
@@ -212,6 +213,20 @@ func actionToText(name string, ctx map[string]any) string {
 	default:
 		return "Пользователь нажал действие: " + name
 	}
+}
+
+// redactCard возвращает копию контекста без номера карты — для трейса. Именно
+// копию: исходная карта принадлежит входящему сообщению, которое a2a-go
+// параллельно сериализует в историю задачи, и правка на месте — гонка.
+func redactCard(ctx map[string]any) map[string]any {
+	out := make(map[string]any, len(ctx))
+	for k, v := range ctx {
+		if k == "card_number" {
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }
 
 // safeActionEcho renders an action's user text for traces, masking payment
@@ -260,19 +275,10 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 				if data, ok := p.Data().(map[string]any); ok {
 					if name, actx, ok := a2ui.ParseAction(data); ok {
 						actionName = name
-						// Копия: ниже из actx вычищается номер карты ради
-						// трейса, а полный контекст ещё нужен verbatim-ветке,
-						// которая пересобирает по нему текст для агента.
-						actionCtx = make(map[string]any, len(actx))
-						for k, v := range actx {
-							actionCtx[k] = v
-						}
+						actionCtx = actx
 						userText = actionToText(name, actx)
-						if name == "submit_refund_details" {
-							delete(actx, "card_number") // keep the number out of the trace
-						}
 						e.trace.Logf("  A2UI action %q ctx=%s → user text %q",
-							name, compactArgs(actx), safeActionEcho(name, userText))
+							name, compactArgs(redactCard(actx)), safeActionEcho(name, userText))
 						break
 					}
 				}
@@ -283,7 +289,7 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 		}
 
 		agentID := e.selectAgent(ec.Message)
-		turn := e.nextTurn(sessionID)
+		turn := e.nextTurn()
 		e.trace.Logf("  agent selection: %s | ход #%d", agentID, turn)
 
 		// Reset this session's slots before the run.
