@@ -105,6 +105,9 @@ export class OrdersApp extends LitElement {
   @state() private _busy = false;
   @state() private _traffic: TrafficEntry[] = [];
   @state() private _agents: AgentInfo[] = [];
+  // Причина, по которой список агентов не удалось загрузить. Панель выбора
+  // никогда не исчезает молча: либо список, либо видимая ошибка.
+  @state() private _agentsError = '';
   @state() private _agentId =
     localStorage.getItem(AGENT_STORAGE_KEY) ?? AUTO_AGENT;
   // Секунды текущего хода. Удалённый агент отвечает десятки секунд, поэтому
@@ -138,8 +141,13 @@ export class OrdersApp extends LitElement {
   async #loadAgents() {
     try {
       const res = await fetch('/api/agents');
-      const agents: AgentInfo[] = await res.json();
-      this._agents = agents;
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const agents: unknown = await res.json();
+      if (!Array.isArray(agents)) {
+        throw new Error('ответ не является списком агентов');
+      }
+      this._agents = agents as AgentInfo[];
+      this._agentsError = '';
       // A stale selection (agent removed from the config) falls back to auto,
       // so the selector never shows a target the server does not know.
       if (this._agentId !== AUTO_AGENT && !agents.some((a) => a.id === this._agentId)) {
@@ -147,6 +155,12 @@ export class OrdersApp extends LitElement {
       }
     } catch (err) {
       console.error('agent list failed:', err);
+      // Список сохраняем: сорвавшийся опрос не повод терять рабочий селектор.
+      this._agentsError = String(err instanceof Error ? err.message : err);
+      // Первая загрузка провалилась — пробуем чаще, чем раз в полминуты.
+      if (!this._agents.length) {
+        setTimeout(() => void this.#loadAgents(), 5_000);
+      }
     }
   }
 
@@ -465,20 +479,35 @@ export class OrdersApp extends LitElement {
 
   render() {
     const selected = this._agents.find((a) => a.id === this._agentId);
+    // Выбор мог не найтись в списке (список не загрузился или агент исчез из
+    // конфига). Тогда рисуем для него отдельную опцию: пустой <select> хуже
+    // любого объяснения, а сам выбор остаётся рабочим — оркестратор либо знает
+    // этот id, либо тихо откатится в «Авто».
+    const orphanSelection =
+      this._agentId !== AUTO_AGENT && !selected ? this._agentId : '';
     return html`
       <h2>Ассистент заказов · A2UI</h2>
-      ${this._agents.length
-        ? html`<div class="agent-bar">
+      ${html`<div class="agent-bar">
             <label for="agent">Агент:</label>
+            <!-- Выбранность отмечается на самих <option>, а не через .value
+                 на <select>: Lit выставляет свойство до того, как появятся
+                 дочерние узлы, и одиночная привязка больше не переприменяется —
+                 селектор остаётся визуально пустым. -->
             <select
               id="agent"
-              .value=${this._agentId}
               @change=${(e: Event) =>
                 this.#selectAgent((e.target as HTMLSelectElement).value)}
             >
-              <option value=${AUTO_AGENT}>Авто (выбирает модель)</option>
+              <option value=${AUTO_AGENT} ?selected=${this._agentId === AUTO_AGENT}>
+                Авто (выбирает модель)
+              </option>
+              ${orphanSelection
+                ? html`<option value=${orphanSelection} selected>
+                    ${orphanSelection} — нет в списке
+                  </option>`
+                : nothing}
               ${this._agents.map(
-                (a) => html`<option value=${a.id}>
+                (a) => html`<option value=${a.id} ?selected=${a.id === this._agentId}>
                   ${a.name}${a.available ? '' : ' — не отвечает'}
                 </option>`,
               )}
@@ -486,8 +515,12 @@ export class OrdersApp extends LitElement {
             ${selected?.verbatim
               ? html`<span class="agent-note">отвечает напрямую, без локальной модели</span>`
               : nothing}
-          </div>`
-        : nothing}
+            ${this._agentsError
+              ? html`<span class="agent-note" title=${this._agentsError}>
+                  список агентов недоступен (${this._agentsError})
+                </span>`
+              : nothing}
+          </div>`}
       <div class="feed">
         ${this._items.map((it) => this.#renderItem(it))}
         ${this._busy
