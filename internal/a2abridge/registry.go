@@ -3,6 +3,7 @@ package a2abridge
 import (
 	"context"
 	"sync"
+	"time"
 
 	"google.golang.org/adk/tool"
 
@@ -17,6 +18,11 @@ type AgentInfo struct {
 	Verbatim    bool   `json:"verbatim"`
 	Available   bool   `json:"available"`
 }
+
+// probeTimeout — предел на проверку доступности агента. Отдельный от таймаута
+// хода (там минуты): /api/agents браузер опрашивает раз в полминуты и после
+// каждого хода, и недостижимый хост не должен подвешивать эндпоинт целиком.
+const probeTimeout = 4 * time.Second
 
 // Registry — набор удалённых агентов из конфига, в порядке объявления.
 // Порядок важен: первый агент обслуживает терминальный REPL, и он же задаёт
@@ -110,7 +116,7 @@ func (g *Registry) Tools(ctx context.Context) []tool.Tool {
 		if !ok {
 			continue
 		}
-		if err := r.Connect(ctx); err != nil {
+		if err := g.probe(ctx, r); err != nil {
 			g.trace.Logf("agent %q unavailable, skipping its tool: %v", id, err)
 			continue
 		}
@@ -140,7 +146,7 @@ func (g *Registry) Summaries(ctx context.Context) []string {
 		if !ok {
 			continue
 		}
-		if err := r.Connect(ctx); err != nil {
+		if err := g.probe(ctx, r); err != nil {
 			continue
 		}
 		if s := r.Profile().Summary; s != "" {
@@ -148,6 +154,15 @@ func (g *Registry) Summaries(ctx context.Context) []string {
 		}
 	}
 	return out
+}
+
+// probe подключает агента с коротким сроком: уже открытое соединение это
+// не трогает (Connect возвращается сразу), а зависший хост не задерживает
+// вызывающего дольше probeTimeout.
+func (g *Registry) probe(ctx context.Context, r *Remote) error {
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	return r.Connect(ctx)
 }
 
 // List описывает агентов для UI, попутно проверяя доступность каждого.
@@ -159,7 +174,7 @@ func (g *Registry) List(ctx context.Context) []AgentInfo {
 		if !ok {
 			continue
 		}
-		if err := r.Connect(ctx); err != nil {
+		if err := g.probe(ctx, r); err != nil {
 			g.trace.Logf("agent %q unavailable: %v", id, err)
 		}
 		out = append(out, AgentInfo{

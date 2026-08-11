@@ -6,7 +6,7 @@
 # The real `configs/orchestrator.yaml` is gitignored because it holds your API key.
 # Env-var overrides (see internal/config): ORCHESTRATOR_LISTEN_ADDR,
 # ORCHESTRATOR_PUBLIC_URL, WORKER_URL, A2A_LOG_PATH, LLM_BASE_URL, LLM_MODEL,
-# LLM_API_KEY, A2A_AGENT_<ID>_PASSWORD.
+# LLM_API_KEY, A2A_AGENT_<ID>_URL, A2A_AGENT_<ID>_PASSWORD.
 #
 # listen_addr/public_url are used only in --web mode (A2A server + embedded frontend).
 listen_addr: ":8080"
@@ -49,9 +49,11 @@ agents:
   #     # Пароль можно не хранить в файле: A2A_AGENT_OUROBOROS_PASSWORD=...
   #     password: testpass
 
-# Исторический одиночный агент. Оставлен ради совместимости: если список
-# `agents` пуст, из worker_url синтезируется единственная запись `orders`.
-worker_url: "http://localhost:8081"
+# `worker_url` — исторический одиночный агент. Он работает ТОЛЬКО когда список
+# `agents` пуст (тогда из него синтезируется запись `orders`), поэтому здесь его
+# нет: иначе переменная WORKER_URL молча перестала бы что-либо значить.
+# Адрес любого агента из списка подменяется переменной A2A_AGENT_<ID>_URL —
+# например A2A_AGENT_ORDERS_URL, так это делает docker-compose.
 
 # File for the A2A protocol trace (how the orchestrator calls the agents).
 # Kept off stdout so it does not clutter the REPL. Override with A2A_LOG_PATH.

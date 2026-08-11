@@ -417,6 +417,15 @@ func (r *Remote) acceptsA2UI() bool {
 	return false
 }
 
+// markUnavailable роняет пометку доступности и заставляет следующий Connect
+// заново резолвить карточку: соединение могло умереть вместе с агентом.
+func (r *Remote) markUnavailable() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.available = false
+	r.client = nil
+}
+
 // PendingTaskID возвращает id зависшей input-required задачи сессии.
 func (r *Remote) PendingTaskID(sessionID string) a2a.TaskID {
 	r.mu.Lock()
@@ -487,6 +496,10 @@ func (r *Remote) Ask(ctx context.Context, sessionID, text string) (Reply, error)
 	res, err := client.SendMessage(ctx, req)
 	if err != nil {
 		r.trace.Logf("    ✖ SendMessage failed: %v", err)
+		// Сорвавшийся запрос — единственный честный признак, что агент лёг:
+		// Connect после первого успеха уже не переспрашивает карточку, и без
+		// этого пометка «доступен» осталась бы навсегда.
+		r.markUnavailable()
 		return Reply{}, fmt.Errorf("agent %q unreachable: %w", r.cfg.ID, err)
 	}
 
@@ -494,6 +507,13 @@ func (r *Remote) Ask(ctx context.Context, sessionID, text string) (Reply, error)
 	case *a2a.Message:
 		r.trace.Logf("◀── response: Message (synchronous, no task) | parts=%d", len(v.Parts))
 		r.clearPending(sessionID)
+		// Синхронный ответ тоже несёт контекст разговора: без этого агент,
+		// отвечающий Message вместо Task, начинал бы беседу заново каждый ход.
+		if v.ContextID != "" {
+			r.mu.Lock()
+			r.contexts[sessionID] = v.ContextID
+			r.mu.Unlock()
+		}
 		return r.replyFromParts(v.Parts, ""), nil
 
 	case *a2a.Task:

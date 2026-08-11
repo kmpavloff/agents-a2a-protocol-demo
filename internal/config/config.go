@@ -89,10 +89,10 @@ type OrchestratorConfig struct {
 
 var agentIDRe = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 
-// envAgentPassword — имя переменной окружения с паролем агента, чтобы секрет
-// можно было держать вне файла конфигурации.
-func envAgentPassword(id string) string {
-	return "A2A_AGENT_" + strings.ToUpper(strings.ReplaceAll(id, "-", "_")) + "_PASSWORD"
+// envAgent строит имя переменной окружения для поля агента: пароль незачем
+// держать в файле, а адрес приходится подменять при запуске в контейнере.
+func envAgent(id, field string) string {
+	return "A2A_AGENT_" + strings.ToUpper(strings.ReplaceAll(id, "-", "_")) + "_" + field
 }
 
 // applyAgentDefaults подставляет умолчания и env-перекрытия, затем валидирует
@@ -108,6 +108,11 @@ func applyAgentDefaults(agents []AgentConfig) error {
 			return fmt.Errorf("orchestrator config: duplicate agent id %q", a.ID)
 		}
 		seen[a.ID] = true
+		// Адрес перекрывается окружением: в контейнере агент живёт по другому
+		// имени, чем на машине разработчика, а конфиг один и тот же.
+		if u := os.Getenv(envAgent(a.ID, "URL")); u != "" {
+			a.URL = u
+		}
 		if a.URL == "" {
 			return fmt.Errorf("orchestrator config: agent %q: url is required", a.ID)
 		}
@@ -124,7 +129,7 @@ func applyAgentDefaults(agents []AgentConfig) error {
 		default:
 			return fmt.Errorf("orchestrator config: agent %q: unsupported auth type %q", a.ID, a.Auth.Type)
 		}
-		if p := os.Getenv(envAgentPassword(a.ID)); p != "" {
+		if p := os.Getenv(envAgent(a.ID, "PASSWORD")); p != "" {
 			a.Auth.Password = p
 		}
 	}

@@ -145,12 +145,13 @@ environment variable (handy for CI or for keeping the key out of files entirely)
 |---|---|---|
 | `WORKER_LISTEN_ADDR` | `:8081` | Worker HTTP listen address |
 | `WORKER_PUBLIC_URL` | `http://localhost:8081` | URL advertised in the AgentCard |
-| `WORKER_URL` | `http://localhost:8081` | Orchestrator → worker A2A base URL |
+| `WORKER_URL` | `http://localhost:8081` | Orchestrator → worker A2A base URL. **Only applies to a config with no `agents:` list** (see [Several agents at once](#several-agents-at-once)); with a list, use `A2A_AGENT_<ID>_URL` |
 | `LLM_BASE_URL` | `http://localhost:1234/v1` | OpenAI-compatible LLM endpoint |
 | `LLM_MODEL` | `local-model` | Model name passed to LM Studio |
 | `LLM_API_KEY` | `lm-studio` | API key (any non-empty string works) |
 | `WORKER_DATA_PATH` | `data/orders.json` | Path to the seed orders file |
 | `ORDER_LINK_BASE` | `https://shop.example.com/orders` | Base URL for order-card links in widgets (`<base>/<id>`) |
+| `A2A_AGENT_<ID>_URL` | — | Base URL of the agent with that `id` (e.g. `A2A_AGENT_ORDERS_URL`) — what Docker Compose uses to point the orchestrator at the worker container |
 | `A2A_AGENT_<ID>_PASSWORD` | — | Basic-auth password for the agent with that `id` (e.g. `A2A_AGENT_OUROBOROS_PASSWORD`), so the secret can stay out of the config file |
 
 > **WSL2 + LM Studio on Windows.** If you run the agents inside WSL2 while LM Studio

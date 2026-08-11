@@ -153,6 +153,7 @@ export class OrdersApp extends LitElement {
   @state() private _elapsed = 0;
   #tick: ReturnType<typeof setInterval> | undefined;
   #agentsPoll: ReturnType<typeof setInterval> | undefined;
+  #agentsRetry: ReturnType<typeof setTimeout> | undefined;
 
   connectedCallback() {
     super.connectedCallback();
@@ -171,6 +172,7 @@ export class OrdersApp extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     clearInterval(this.#agentsPoll);
+    clearTimeout(this.#agentsRetry);
     clearInterval(this.#tick);
   }
 
@@ -178,6 +180,7 @@ export class OrdersApp extends LitElement {
     try {
       const res = await fetch('/api/agents');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      clearTimeout(this.#agentsRetry);
       const agents: unknown = await res.json();
       if (!Array.isArray(agents)) {
         throw new Error('ответ не является списком агентов');
@@ -193,9 +196,12 @@ export class OrdersApp extends LitElement {
       console.error('agent list failed:', err);
       // Список сохраняем: сорвавшийся опрос не повод терять рабочий селектор.
       this._agentsError = String(err instanceof Error ? err.message : err);
-      // Первая загрузка провалилась — пробуем чаще, чем раз в полминуты.
+      // Первая загрузка провалилась — пробуем чаще, чем раз в полминуты. Ровно
+      // одна отложенная попытка: и опрос по таймеру, и конец хода зовут этот
+      // метод, а каждый сбой плодил бы ещё одну независимую цепочку.
       if (!this._agents.length) {
-        setTimeout(() => void this.#loadAgents(), 5_000);
+        clearTimeout(this.#agentsRetry);
+        this.#agentsRetry = setTimeout(() => void this.#loadAgents(), 5_000);
       }
     }
   }
@@ -220,11 +226,16 @@ export class OrdersApp extends LitElement {
     userText: string | null,
     run: () => Promise<{a2ui: any[]; text: string; files?: FileAttachment[]}>,
   ) {
+    // Кнопки внутри виджета не блокируются на время хода, поэтому клик по ним
+    // мог запустить второй ход поверх первого: прежний интервал терялся и до
+    // конца жизни страницы дописывал чужое время.
+    if (this._busy) return;
     if (userText) this._items = [...this._items, {kind: 'user', text: userText}];
     const startedAt = performance.now();
     const agent = this.#busyLabel;
     this._busy = true;
     this._elapsed = 0;
+    clearInterval(this.#tick);
     this.#tick = setInterval(() => {
       this._elapsed = (performance.now() - startedAt) / 1000;
     }, 100);

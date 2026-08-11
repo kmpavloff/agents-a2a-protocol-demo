@@ -58,6 +58,11 @@ func main() {
 			a.ID, a.URL, a.CardPath, a.Skill, a.Verbatim, a.TimeoutDuration())
 	}
 
+	// Сессионная служба общая для всех runner'ов: набор инструментов меняется
+	// при переключении агента в селекторе, но история разговора привязана к
+	// contextId и переезжать вместе с ним не должна.
+	sessions := session.InMemoryService()
+
 	// buildRunner собирает runner под набор инструментов выбранного агента:
 	// в режиме «Авто» их несколько, при явном выборе — ровно один.
 	buildRunner := func(tools []tool.Tool, summary string) (*runner.Runner, error) {
@@ -68,7 +73,7 @@ func main() {
 		return runner.New(runner.Config{
 			AppName:           "orchestrator",
 			Agent:             ag,
-			SessionService:    session.InMemoryService(),
+			SessionService:    sessions,
 			AutoCreateSession: true,
 		})
 	}

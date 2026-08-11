@@ -24,6 +24,9 @@ services:
     depends_on:
       - worker
     environment:
+      # Адрес агента `orders` из configs/orchestrator.yaml. WORKER_URL здесь не
+      # годится: он влияет только на конфиг без списка `agents`.
+      A2A_AGENT_ORDERS_URL: "http://worker:8081"
       WORKER_URL: "http://worker:8081"
       LLM_BASE_URL: "http://host.docker.internal:1234/v1"
     extra_hosts:

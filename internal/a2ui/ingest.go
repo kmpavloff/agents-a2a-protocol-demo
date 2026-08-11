@@ -112,6 +112,19 @@ func normalizeMessage(msg map[string]any, st *ingestState) (map[string]any, bool
 	}
 	out["version"] = Version
 
+	if kind == "createSurface" {
+		// Компоненты мы приводим к basic-каталогу, поэтому и объявлять надо
+		// его: иначе клиент отвергнет поверхность, которую Ingest уже сделал
+		// пригодной к отрисовке.
+		if payload, ok := out["createSurface"].(map[string]any); ok {
+			copied := make(map[string]any, len(payload))
+			for k, v := range payload {
+				copied[k] = v
+			}
+			copied["catalogId"] = CatalogID
+			out["createSurface"] = copied
+		}
+	}
 	if kind != "updateComponents" {
 		return out, true
 	}

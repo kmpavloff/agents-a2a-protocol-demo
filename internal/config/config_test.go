@@ -168,3 +168,23 @@ func TestLoadOrchestratorRejectsBadAgents(t *testing.T) {
 		})
 	}
 }
+
+// Адрес агента подменяется окружением: в контейнере воркер живёт по другому
+// имени, а конфиг тот же. Без этого docker-compose тихо ходил бы на localhost.
+func TestLoadOrchestratorAgentURLFromEnv(t *testing.T) {
+	p := writeTemp(t, `
+agents:
+  - id: orders
+    url: "http://localhost:8081"
+llm:
+  base_url: "http://localhost:1234/v1"
+`)
+	t.Setenv("A2A_AGENT_ORDERS_URL", "http://worker:8081")
+	cfg, err := LoadOrchestrator(p)
+	if err != nil {
+		t.Fatalf("LoadOrchestrator: %v", err)
+	}
+	if cfg.Agents[0].URL != "http://worker:8081" {
+		t.Errorf("url from env: got %q", cfg.Agents[0].URL)
+	}
+}

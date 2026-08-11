@@ -112,11 +112,14 @@ func (e *orchExecutor) selectAgent(msg *a2a.Message) string {
 // "auto" mode, or with exactly one tool when the user picked an agent. Runners
 // are cached per selection.
 func (e *orchExecutor) runnerFor(ctx context.Context, agentID string) (*runner.Runner, error) {
-	e.mu.Lock()
-	r, ok := e.runners[agentID]
-	e.mu.Unlock()
-	if ok {
-		return r, nil
+	cacheKey := agentID
+	if agentID != autoAgentID {
+		e.mu.Lock()
+		r, ok := e.runners[cacheKey]
+		e.mu.Unlock()
+		if ok {
+			return r, nil
+		}
 	}
 
 	var tools []tool.Tool
@@ -124,6 +127,15 @@ func (e *orchExecutor) runnerFor(ctx context.Context, agentID string) (*runner.R
 	if agentID == autoAgentID {
 		tools = e.reg.Tools(ctx)
 		summary = strings.Join(e.reg.Summaries(ctx), "\n\n")
+		// Кэш «Авто» привязан к набору доступных агентов: лежавший в момент
+		// первой сборки агент иначе остался бы без инструмента навсегда, хотя
+		// UI уже показывает его живым.
+		names := make([]string, 0, len(tools))
+		for _, t := range tools {
+			names = append(names, t.Name())
+		}
+		sort.Strings(names)
+		cacheKey = autoAgentID + "|" + strings.Join(names, ",")
 	} else {
 		remote, ok := e.reg.Get(agentID)
 		if !ok {
@@ -143,12 +155,19 @@ func (e *orchExecutor) runnerFor(ctx context.Context, agentID string) (*runner.R
 		return nil, fmt.Errorf("нет доступных агентов")
 	}
 
+	e.mu.Lock()
+	cached, ok := e.runners[cacheKey]
+	e.mu.Unlock()
+	if ok {
+		return cached, nil
+	}
+
 	r, err := e.build(tools, summary)
 	if err != nil {
 		return nil, err
 	}
 	e.mu.Lock()
-	e.runners[agentID] = r
+	e.runners[cacheKey] = r
 	e.mu.Unlock()
 	return r, nil
 }
@@ -241,7 +260,13 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 				if data, ok := p.Data().(map[string]any); ok {
 					if name, actx, ok := a2ui.ParseAction(data); ok {
 						actionName = name
-						actionCtx = actx
+						// Копия: ниже из actx вычищается номер карты ради
+						// трейса, а полный контекст ещё нужен verbatim-ветке,
+						// которая пересобирает по нему текст для агента.
+						actionCtx = make(map[string]any, len(actx))
+						for k, v := range actx {
+							actionCtx[k] = v
+						}
 						userText = actionToText(name, actx)
 						if name == "submit_refund_details" {
 							delete(actx, "card_number") // keep the number out of the trace
