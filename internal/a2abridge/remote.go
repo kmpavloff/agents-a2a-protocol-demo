@@ -466,7 +466,17 @@ func (r *Remote) Ask(ctx context.Context, sessionID, text string) (Reply, error)
 	if r.cfg.Skill != "" {
 		msg.Metadata = map[string]any{"skill": r.cfg.Skill}
 	}
-	r.trace.Logf("    SendMessage role=user skill=%q text=%q", r.cfg.Skill, text)
+	// contextId в трейсе — потому что «агент забывает разговор» это первый
+	// вопрос, который приходится проверять, а без него не видно, передаём ли мы
+	// контекст или начинаем беседу заново.
+	sentCtx := msg.ContextID
+	if hasPending {
+		sentCtx = p.contextID
+	}
+	if sentCtx == "" {
+		sentCtx = "(новый разговор)"
+	}
+	r.trace.Logf("    SendMessage role=user skill=%q contextId=%s text=%q", r.cfg.Skill, sentCtx, text)
 
 	req := &a2a.SendMessageRequest{Message: msg}
 	if r.acceptsA2UI() {
