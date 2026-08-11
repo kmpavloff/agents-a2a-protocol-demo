@@ -56,6 +56,21 @@ type Item =
   | {kind: 'file'; name: string; href: string}
   | {kind: 'timing'; seconds: number; agent: string};
 
+/**
+ * Человекочитаемая причина сорвавшегося хода. Сетевой сбой браузер сообщает
+ * голым «TypeError: Failed to fetch», из чего непонятно даже, чья это сторона,
+ * — а чаще всего это просто не запущенный оркестратор.
+ */
+function describeTurnError(err: unknown): string {
+  if (err instanceof TypeError) {
+    return (
+      'Оркестратор не отвечает — запрос не ушёл. Проверьте, запущен ли он: ' +
+      '`go run ./cmd/orchestrator --web`. Подробности в консоли браузера.'
+    );
+  }
+  return `Ошибка: ${err}`;
+}
+
 /** Длительность хода: «52,3 с» / «1 мин 04 с». */
 function formatDuration(seconds: number): string {
   if (seconds < 60) return `${seconds.toFixed(1).replace('.', ',')} с`;
@@ -214,7 +229,7 @@ export class OrdersApp extends LitElement {
       }
     } catch (err) {
       console.error('turn failed:', err);
-      this._items = [...this._items, {kind: 'assistant', text: `Ошибка: ${err}`}];
+      this._items = [...this._items, {kind: 'assistant', text: describeTurnError(err)}];
     } finally {
       clearInterval(this.#tick);
       this._busy = false;
