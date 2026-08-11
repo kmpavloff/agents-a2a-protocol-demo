@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/config"
+	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/llm"
 )
 
 // ouroborosStub отвечает ровно как внешний агент: карточка по своему пути,
@@ -311,5 +312,40 @@ func TestMergeEndpoint(t *testing.T) {
 		if got := mergeEndpoint(c.base, c.declared); got != c.want {
 			t.Errorf("mergeEndpoint(%q, %q) = %q, want %q", c.base, c.declared, got, c.want)
 		}
+	}
+}
+
+// Агенту, объявившему A2UI, надо явно сказать, что клиент его отрендерит:
+// иначе он на своё усмотрение отвечает то виджетом, то голым текстом.
+func TestRemoteRequestsA2UIWhenCardAdvertisesIt(t *testing.T) {
+	s := startOuroborosStub(t, false)
+	r := NewRemote(ouroborosCfg(s.URL), nil)
+	if _, err := r.Ask(context.Background(), "sess-1", "статус заказа"); err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	params, _ := s.request(t, 0)["params"].(map[string]any)
+	cfg, _ := params["configuration"].(map[string]any)
+	modes, _ := cfg["acceptedOutputModes"].([]any)
+	found := false
+	for _, m := range modes {
+		if m == "application/a2ui+json" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("acceptedOutputModes must offer A2UI, got %v", modes)
+	}
+}
+
+// Агент, не объявивший A2UI, не должен получать запрос на него.
+func TestRemoteSkipsA2UIRequestForPlainAgent(t *testing.T) {
+	workerURL := startWorker(t, llm.NewStub(llm.StubTurn{Text: "ок"}))
+	r := NewRemote(config.AgentConfig{ID: "orders", URL: workerURL,
+		CardPath: "/.well-known/agent-card.json"}, nil)
+	if err := r.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if r.acceptsA2UI() {
+		t.Error("worker card does not advertise A2UI, must not be asked for it")
 	}
 }

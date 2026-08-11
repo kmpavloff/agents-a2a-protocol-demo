@@ -396,6 +396,27 @@ func defaultToolName(id string) string {
 	return "ask_" + slug
 }
 
+// acceptsA2UI сообщает, объявляет ли агент способность отдавать A2UI: только
+// таким агентам есть смысл слать запрос на generative UI.
+func (r *Remote) acceptsA2UI() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.card == nil {
+		return false
+	}
+	for _, mode := range r.card.DefaultOutputModes {
+		if mode == a2ui.MIMEType {
+			return true
+		}
+	}
+	for _, ext := range r.card.Capabilities.Extensions {
+		if ext.URI == a2ui.ExtensionURI {
+			return true
+		}
+	}
+	return false
+}
+
 // PendingTaskID возвращает id зависшей input-required задачи сессии.
 func (r *Remote) PendingTaskID(sessionID string) a2a.TaskID {
 	r.mu.Lock()
@@ -419,6 +440,14 @@ func (r *Remote) Ask(ctx context.Context, sessionID, text string) (Reply, error)
 	ctx, cancel := context.WithTimeout(ctx, r.cfg.TimeoutDuration())
 	defer cancel()
 
+	// Сказать агенту, что клиент умеет рендерить generative UI. Без этого он
+	// решает сам, и на части ходов отвечает только текстом. Два канала сразу:
+	// acceptedOutputModes из A2A-запроса и заголовок A2A-Extensions — именно им
+	// договаривается с нами наш собственный браузер.
+	if r.acceptsA2UI() {
+		ctx = withExt(ctx)
+	}
+
 	r.trace.Logf("──▶ delegating to agent %q | session=%s", r.cfg.ID, sessionID)
 
 	var msg *a2a.Message
@@ -439,7 +468,13 @@ func (r *Remote) Ask(ctx context.Context, sessionID, text string) (Reply, error)
 	}
 	r.trace.Logf("    SendMessage role=user skill=%q text=%q", r.cfg.Skill, text)
 
-	res, err := client.SendMessage(ctx, &a2a.SendMessageRequest{Message: msg})
+	req := &a2a.SendMessageRequest{Message: msg}
+	if r.acceptsA2UI() {
+		req.Config = &a2a.SendMessageConfig{
+			AcceptedOutputModes: []string{"text/plain", a2ui.MIMEType},
+		}
+	}
+	res, err := client.SendMessage(ctx, req)
 	if err != nil {
 		r.trace.Logf("    ✖ SendMessage failed: %v", err)
 		return Reply{}, fmt.Errorf("agent %q unreachable: %w", r.cfg.ID, err)
@@ -524,6 +559,11 @@ func (r *Remote) replyFromTask(sessionID string, task *a2a.Task) Reply {
 	reply := r.replyFromParts(parts, fallback)
 	r.trace.Logf("    ✔ terminal state | text=%q a2ui=%d widgets=%d files=%d",
 		reply.Text, len(reply.A2UI), len(reply.Widgets), len(reply.Files))
+	if len(reply.A2UI) == 0 && len(reply.Widgets) == 0 && r.acceptsA2UI() {
+		// Частый вопрос «почему нет виджета»: агент объявляет A2UI в карточке,
+		// мы его запросили, но на этом ходу он решил ответить только текстом.
+		r.trace.Logf("    ⓘ агент объявляет A2UI и получил запрос на него, но в этом ответе прислал только текст — виджета не будет")
+	}
 	return reply
 }
 
