@@ -17,12 +17,16 @@ type AgentInfo struct {
 	Description string `json:"description"`
 	Verbatim    bool   `json:"verbatim"`
 	Available   bool   `json:"available"`
+	// Probed=false означает «ещё не проверяли», а не «недоступен»: клиенту
+	// нельзя показывать домысел как факт.
+	Probed bool `json:"probed"`
 }
 
-// probeTimeout — предел на проверку доступности агента. Отдельный от таймаута
-// хода (там минуты): /api/agents браузер опрашивает раз в полминуты и после
-// каждого хода, и недостижимый хост не должен подвешивать эндпоинт целиком.
-const probeTimeout = 4 * time.Second
+// probeTimeout — предел на фоновую проверку доступности. Щедрый: карточка у
+// занятого агента отвечает и по десять секунд, и торопливый предел объявил бы
+// живого агента мёртвым. Ждать столько браузеру не приходится — проверка идёт
+// в фоне, а /api/agents отдаёт последнее известное состояние сразу.
+const probeTimeout = 30 * time.Second
 
 // Registry — набор удалённых агентов из конфига, в порядке объявления.
 // Порядок важен: первый агент обслуживает терминальный REPL, и он же задаёт
@@ -34,6 +38,7 @@ type Registry struct {
 	order   []string
 	remotes map[string]*Remote
 	clients map[string]*OrdersClient
+	probing map[string]bool // идущие фоновые проверки, чтобы не плодить их
 }
 
 // NewRegistry создаёт реестр по конфигу. Соединения не открываются: каждый
@@ -43,6 +48,7 @@ func NewRegistry(agents []config.AgentConfig, trace *Tracer) *Registry {
 		trace:   trace,
 		remotes: make(map[string]*Remote, len(agents)),
 		clients: make(map[string]*OrdersClient, len(agents)),
+		probing: make(map[string]bool, len(agents)),
 	}
 	for _, cfg := range agents {
 		g.order = append(g.order, cfg.ID)
@@ -116,7 +122,7 @@ func (g *Registry) Tools(ctx context.Context) []tool.Tool {
 		if !ok {
 			continue
 		}
-		if err := g.probe(ctx, r); err != nil {
+		if err := r.Connect(ctx); err != nil {
 			g.trace.Logf("agent %q unavailable, skipping its tool: %v", id, err)
 			continue
 		}
@@ -146,7 +152,7 @@ func (g *Registry) Summaries(ctx context.Context) []string {
 		if !ok {
 			continue
 		}
-		if err := g.probe(ctx, r); err != nil {
+		if err := r.Connect(ctx); err != nil {
 			continue
 		}
 		if s := r.Profile().Summary; s != "" {
@@ -156,17 +162,35 @@ func (g *Registry) Summaries(ctx context.Context) []string {
 	return out
 }
 
-// probe подключает агента с коротким сроком: уже открытое соединение это
-// не трогает (Connect возвращается сразу), а зависший хост не задерживает
-// вызывающего дольше probeTimeout.
-func (g *Registry) probe(ctx context.Context, r *Remote) error {
-	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
-	defer cancel()
-	return r.Connect(ctx)
+// probeAsync проверяет доступность агента в фоне, по одной проверке на агента
+// одновременно. Синхронно этого делать нельзя: карточка у занятого агента
+// отвечает секундами, а /api/agents браузер дёргает раз в полминуты и после
+// каждого хода.
+func (g *Registry) probeAsync(r *Remote) {
+	id := r.ID()
+	g.mu.Lock()
+	if g.probing[id] {
+		g.mu.Unlock()
+		return
+	}
+	g.probing[id] = true
+	g.mu.Unlock()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+		defer cancel()
+		if err := r.Connect(ctx); err != nil {
+			g.trace.Logf("agent %q unavailable: %v", id, err)
+		}
+		g.mu.Lock()
+		delete(g.probing, id)
+		g.mu.Unlock()
+	}()
 }
 
-// List описывает агентов для UI, попутно проверяя доступность каждого.
-func (g *Registry) List(ctx context.Context) []AgentInfo {
+// List описывает агентов для UI. Отдаёт последнее известное состояние сразу и
+// запускает фоновое обновление — эндпоинт не должен ждать медленного агента.
+func (g *Registry) List(_ context.Context) []AgentInfo {
 	ids := g.IDs()
 	out := make([]AgentInfo, 0, len(ids))
 	for _, id := range ids {
@@ -174,15 +198,14 @@ func (g *Registry) List(ctx context.Context) []AgentInfo {
 		if !ok {
 			continue
 		}
-		if err := g.probe(ctx, r); err != nil {
-			g.trace.Logf("agent %q unavailable: %v", id, err)
-		}
+		g.probeAsync(r)
 		out = append(out, AgentInfo{
 			ID:          r.ID(),
 			Name:        r.Name(),
 			Description: r.Description(),
 			Verbatim:    r.Verbatim(),
 			Available:   r.Available(),
+			Probed:      r.Probed(),
 		})
 	}
 	return out

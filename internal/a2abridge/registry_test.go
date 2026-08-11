@@ -3,6 +3,7 @@ package a2abridge
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/config"
 )
@@ -34,9 +35,25 @@ func TestRegistryListMarksUnavailable(t *testing.T) {
 	cfg.Timeout = "2s"
 	g := NewRegistry([]config.AgentConfig{cfg}, nil)
 
+	// Первый List отдаёт «ещё не проверяли» и уходит проверять в фоне: ждать
+	// медленного агента эндпоинт не должен.
 	infos := g.List(context.Background())
 	if len(infos) != 1 {
 		t.Fatalf("infos: got %d, want 1", len(infos))
+	}
+	if infos[0].Probed {
+		t.Error("первый List не должен утверждать, что агент уже проверен")
+	}
+	// Дать фоновой проверке добежать до отказа.
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if infos = g.List(context.Background()); infos[0].Probed {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !infos[0].Probed {
+		t.Fatal("фоновая проверка не отработала")
 	}
 	if infos[0].Available {
 		t.Error("unreachable agent must be marked unavailable")

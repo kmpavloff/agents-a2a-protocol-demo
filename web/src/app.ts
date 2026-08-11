@@ -86,6 +86,9 @@ interface AgentInfo {
   description: string;
   verbatim: boolean;
   available: boolean;
+  // probed=false — «ещё не проверяли». Пометка о недоступности до первой
+  // проверки была бы домыслом: агент отвечает не мгновенно.
+  probed: boolean;
 }
 
 const AGENT_STORAGE_KEY = 'a2a.agentId';
@@ -568,7 +571,7 @@ export class OrdersApp extends LitElement {
                 : nothing}
               ${this._agents.map(
                 (a) => html`<option value=${a.id} ?selected=${a.id === this._agentId}>
-                  ${a.name}${a.available ? '' : ' — не отвечает'}
+                  ${a.name}${a.probed && !a.available ? ' — не отвечает' : ''}
                 </option>`,
               )}
             </select>

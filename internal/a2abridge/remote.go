@@ -220,11 +220,18 @@ type Remote struct {
 	cfg   config.AgentConfig
 	trace *Tracer
 
+	// connectMu сериализует попытки подключения, mu защищает только поля.
+	// Держать mu на время сетевого запроса нельзя: за ним встают Name(),
+	// Available() и прочие дешёвые чтения — например, из обработчика
+	// /api/agents, который обязан отвечать мгновенно.
+	connectMu sync.Mutex
+
 	mu        sync.Mutex
 	client    *a2aclient.Client
 	card      *a2a.AgentCard
 	profile   WorkerProfile
 	available bool
+	probed    bool               // была ли хоть одна попытка подключения
 	toolName  string             // перекрытие имени инструмента (см. Registry)
 	pending   map[string]pending // sessionID → зависшая input-required задача
 	contexts  map[string]string  // sessionID → contextId удалённого агента
@@ -279,6 +286,14 @@ func (r *Remote) Available() bool {
 	return r.available
 }
 
+// Probed сообщает, была ли вообще попытка подключиться. Пока её не было,
+// «недоступен» — не факт, а домысел, и показывать его пользователю нельзя.
+func (r *Remote) Probed() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.probed
+}
+
 // Profile возвращает выведенный профиль агента (имя и описание делегирующего
 // инструмента плюс блок для промпта).
 func (r *Remote) Profile() WorkerProfile {
@@ -312,17 +327,24 @@ func (r *Remote) httpClient() *http.Client {
 // Connect резолвит AgentCard и создаёт клиента. Идемпотентен; после неудачи
 // следующий вызов пробует снова, поэтому выключенный агент оживает сам.
 func (r *Remote) Connect(ctx context.Context) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.client != nil {
+	if r.connected() {
 		return nil
 	}
+	r.connectMu.Lock()
+	defer r.connectMu.Unlock()
+	if r.connected() {
+		return nil
+	}
+
+	r.mu.Lock()
+	r.probed = true
+	r.mu.Unlock()
 
 	hc := r.httpClient()
 	resolver := &agentcard.Resolver{Client: hc, CardParser: tolerantCardParser(r.trace)}
 	card, err := resolver.Resolve(ctx, r.cfg.URL, agentcard.WithPath(r.cfg.CardPath))
 	if err != nil {
-		r.available = false
+		r.markUnavailable()
 		return fmt.Errorf("resolve card of %q at %s%s: %w", r.cfg.ID, r.cfg.URL, r.cfg.CardPath, err)
 	}
 	// Хост из карточки бывает нерабочим (живой агент объявляет
@@ -343,17 +365,28 @@ func (r *Remote) Connect(ctx context.Context) error {
 
 	cl, err := a2aclient.NewFromCard(ctx, card, a2aclient.WithJSONRPCTransport(hc))
 	if err != nil {
-		r.available = false
+		r.markUnavailable()
 		return fmt.Errorf("a2a client for %q: %w", r.cfg.ID, err)
 	}
 
+	r.mu.Lock()
 	r.card = card
 	r.client = cl
 	r.available = true
 	r.profile = r.buildProfile(card)
+	toolName := r.profile.ToolName
+	r.mu.Unlock()
+
 	r.trace.Logf("resolved AgentCard %q of agent %q at %s (tool %q)",
-		card.Name, r.cfg.ID, r.cfg.URL, r.profile.ToolName)
+		card.Name, r.cfg.ID, r.cfg.URL, toolName)
 	return nil
+}
+
+// connected сообщает, есть ли готовый клиент.
+func (r *Remote) connected() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.client != nil
 }
 
 // buildProfile выводит профиль агента. Если агент описан в конфиге, конфиг
