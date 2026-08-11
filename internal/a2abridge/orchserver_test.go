@@ -369,3 +369,55 @@ func TestActionToPromptDescribesUnknownButton(t *testing.T) {
 		t.Errorf("approve_refund → %q, want «да»", got)
 	}
 }
+
+// Агент выводит surfaceId из контекста, который живёт всю сессию. Если не
+// разводить поверхности по ходам, второй ход роняет рендерер в браузере
+// ошибкой «Surface … already exists» — а на сервере всё выглядит исправным.
+func TestExecutorGivesEachTurnItsOwnSurface(t *testing.T) {
+	s := startOuroborosStub(t, false)
+	reg := NewRegistry([]config.AgentConfig{ouroborosCfg(s.URL)}, nil)
+	url := serveExecutor(t, NewOrchestratorExecutor(reg, failingBuilder(t), nil), OrchestratorCard)
+
+	probe := newA2UIClient(t, url)
+	probe.c.AgentID = "ouroboros"
+
+	surfaceIDs := func(parts []*a2a.Part) []string {
+		var ids []string
+		for _, p := range parts {
+			if p == nil || p.MediaType != a2ui.MIMEType {
+				continue
+			}
+			m, ok := p.Data().(map[string]any)
+			if !ok {
+				continue
+			}
+			for _, key := range []string{"createSurface", "updateComponents"} {
+				if payload, ok := m[key].(map[string]any); ok {
+					if id, ok := payload["surfaceId"].(string); ok {
+						ids = append(ids, id)
+					}
+				}
+			}
+		}
+		return ids
+	}
+
+	first := surfaceIDs(probe.sendText(t, "первый заказ"))
+	second := surfaceIDs(probe.sendText(t, "второй заказ"))
+	if len(first) == 0 || len(second) == 0 {
+		t.Fatalf("ожидались A2UI-части в обоих ходах: %v / %v", first, second)
+	}
+	for _, a := range first {
+		for _, b := range second {
+			if a == b {
+				t.Fatalf("поверхность %q переиспользована на втором ходу", a)
+			}
+		}
+	}
+	// Внутри одного хода ссылка обязана остаться единой.
+	for _, id := range first[1:] {
+		if id != first[0] {
+			t.Errorf("в пределах хода surfaceId разъехались: %v", first)
+		}
+	}
+}

@@ -43,6 +43,7 @@ type orchExecutor struct {
 	trace *Tracer
 
 	mu      sync.Mutex
+	turns   map[string]int              // sessionID → номер хода
 	runners map[string]*runner.Runner   // agentId (или "auto") → runner
 	widgets map[string][]map[string]any // sessionID → widgets produced this turn
 	a2uis   map[string][]map[string]any // sessionID → A2UI messages produced this turn
@@ -58,6 +59,7 @@ func NewOrchestratorExecutor(reg *Registry, build RunnerBuilder, trace *Tracer) 
 		reg:     reg,
 		build:   build,
 		trace:   trace,
+		turns:   make(map[string]int),
 		runners: make(map[string]*runner.Runner),
 		widgets: make(map[string][]map[string]any),
 		a2uis:   make(map[string][]map[string]any),
@@ -149,6 +151,17 @@ func (e *orchExecutor) runnerFor(ctx context.Context, agentID string) (*runner.R
 	e.runners[agentID] = r
 	e.mu.Unlock()
 	return r, nil
+}
+
+// nextTurn возвращает номер очередного хода сессии. Он превращается в суффикс
+// surfaceId: агент выводит id поверхности из контекста, который живёт всю
+// сессию, и без разведения второй ход роняет рендерер «Surface … already
+// exists».
+func (e *orchExecutor) nextTurn(sessionID string) int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.turns[sessionID]++
+	return e.turns[sessionID]
 }
 
 // drain takes everything collected for the session during this turn.
@@ -245,7 +258,8 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 		}
 
 		agentID := e.selectAgent(ec.Message)
-		e.trace.Logf("  agent selection: %s", agentID)
+		turn := e.nextTurn(sessionID)
+		e.trace.Logf("  agent selection: %s | ход #%d", agentID, turn)
 
 		// Reset this session's slots before the run.
 		e.drain(sessionID)
@@ -253,7 +267,7 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 		emit := func(text string, ws, msgs []map[string]any, fs []attachedFile, what string) {
 			parts := []*a2a.Part{a2a.NewTextPart(strings.TrimSpace(orDefault(text, "Готово.")))}
 			parts = append(parts, e.a2uiParts(a2uiActive, ws)...)
-			parts = append(parts, e.a2uiMessageParts(a2uiActive, msgs)...)
+			parts = append(parts, e.a2uiMessageParts(a2uiActive, msgs, turn)...)
 			parts = append(parts, fileParts(fs)...)
 			e.trace.Logf("  → emit: artifact + completed | %s | parts=%d requestTook=%s",
 				what, len(parts), time.Since(reqStart).Round(time.Millisecond))
@@ -459,13 +473,16 @@ func (e *orchExecutor) a2uiParts(a2uiActive bool, ws []map[string]any) []*a2a.Pa
 // a2uiMessageParts wraps A2UI messages a remote agent authored itself into
 // DataParts. Unlike a2uiParts these need no mapping — they already went through
 // a2ui.Ingest, which normalised whatever dialect the agent used.
-func (e *orchExecutor) a2uiMessageParts(a2uiActive bool, msgs []map[string]any) []*a2a.Part {
+func (e *orchExecutor) a2uiMessageParts(a2uiActive bool, msgs []map[string]any, turn int) []*a2a.Part {
 	if !a2uiActive {
 		if len(msgs) > 0 {
 			e.trace.Logf("  A2UI inactive — %d agent message(s) dropped, text-only response", len(msgs))
 		}
 		return nil
 	}
+	// Каждый ход — своя поверхность: в ленте это отдельная карточка, а
+	// повторный createSurface с тем же id рендерер не переживает.
+	msgs = a2ui.RetagSurfaces(msgs, fmt.Sprintf("-t%d", turn))
 	parts := make([]*a2a.Part, 0, len(msgs))
 	for _, m := range msgs {
 		part := a2a.NewDataPart(m)

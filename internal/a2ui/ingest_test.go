@@ -270,3 +270,29 @@ func TestEnsureRootCollectsSeveralTops(t *testing.T) {
 		t.Errorf("both tops must hang under root: %v", got[0])
 	}
 }
+
+// Агент выводит surfaceId из контекста, а контекст живёт всю сессию — без
+// переименования второй ход роняет рендерер «Surface … already exists».
+func TestRetagSurfaces(t *testing.T) {
+	msgs := []map[string]any{
+		{"version": Version, "createSurface": map[string]any{"surfaceId": "s1", "catalogId": CatalogID}},
+		{"version": Version, "updateComponents": map[string]any{"surfaceId": "s1",
+			"components": []map[string]any{{"id": "root", "component": "Text", "text": "x"}}}},
+	}
+	got := RetagSurfaces(msgs, "-t2")
+	if id := got[0]["createSurface"].(map[string]any)["surfaceId"]; id != "s1-t2" {
+		t.Errorf("createSurface: %v", id)
+	}
+	// Ссылка обязана переехать вместе с поверхностью, иначе обновление
+	// прилетит в несуществующий id.
+	if id := got[1]["updateComponents"].(map[string]any)["surfaceId"]; id != "s1-t2" {
+		t.Errorf("updateComponents: %v", id)
+	}
+	// Исходный набор не тронут: он мог уже уехать другому получателю.
+	if id := msgs[0]["createSurface"].(map[string]any)["surfaceId"]; id != "s1" {
+		t.Errorf("исходные сообщения изменены: %v", id)
+	}
+	if got := RetagSurfaces(msgs, ""); &got[0] == &msgs[0] && len(got) != len(msgs) {
+		t.Error("пустой суффикс должен возвращать набор как есть")
+	}
+}

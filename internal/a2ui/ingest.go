@@ -398,3 +398,46 @@ func unknownDump(typ string, props map[string]any) string {
 	}
 	return "`" + typ + "` " + string(raw)
 }
+
+// surfaceIDKeys — сообщения, у которых есть surfaceId.
+var surfaceIDKeys = []string{"createSurface", "updateComponents", "updateDataModel", "deleteSurface"}
+
+// RetagSurfaces приписывает суффикс ко всем surfaceId в наборе сообщений.
+//
+// Нужно потому, что агент нередко выводит surfaceId из идентификатора
+// контекста, а контекст живёт всю сессию: второй ход присылает createSurface с
+// тем же id, и рендерер падает с «Surface … already exists». В ленте каждый ход
+// — отдельная карточка, поэтому и поверхность у него должна быть своя.
+//
+// Ссылки внутри набора переписываются согласованно, так что updateComponents
+// по-прежнему попадает в свою поверхность.
+func RetagSurfaces(msgs []map[string]any, suffix string) []map[string]any {
+	if suffix == "" {
+		return msgs
+	}
+	out := make([]map[string]any, 0, len(msgs))
+	for _, m := range msgs {
+		next := make(map[string]any, len(m))
+		for k, v := range m {
+			next[k] = v
+		}
+		for _, key := range surfaceIDKeys {
+			payload, ok := next[key].(map[string]any)
+			if !ok {
+				continue
+			}
+			id, ok := payload["surfaceId"].(string)
+			if !ok || id == "" {
+				continue
+			}
+			copied := make(map[string]any, len(payload))
+			for k, v := range payload {
+				copied[k] = v
+			}
+			copied["surfaceId"] = id + suffix
+			next[key] = copied
+		}
+		out = append(out, next)
+	}
+	return out
+}
