@@ -330,7 +330,12 @@ the gateway absorbs that rather than failing:
   than dropping it.
 
 Each of these is traced, so the protocol log shows exactly which allowance was
-applied. To check the chain against a real agent:
+applied. Every allowance is written up — with the spec citation it violates, the
+live response, and a reproduction command — in
+[docs/interop/2026-08-11-ouroboros-report.md](docs/interop/2026-08-11-ouroboros-report.md);
+when the remote side fixes one, the matching allowance can be dropped.
+
+To check the chain against a real agent:
 
 ```bash
 LIVE_AGENT_URL=http://192.168.1.68:18800 \
