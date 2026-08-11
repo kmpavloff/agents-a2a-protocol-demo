@@ -53,7 +53,16 @@ type Item =
   | {kind: 'user'; text: string}
   | {kind: 'assistant'; text: string}
   | {kind: 'widget'; surface: any}
-  | {kind: 'file'; name: string; href: string};
+  | {kind: 'file'; name: string; href: string}
+  | {kind: 'timing'; seconds: number; agent: string};
+
+/** Длительность хода: «52,3 с» / «1 мин 04 с». */
+function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds.toFixed(1).replace('.', ',')} с`;
+  const m = Math.floor(seconds / 60);
+  const rest = Math.round(seconds - m * 60);
+  return `${m} мин ${String(rest).padStart(2, '0')} с`;
+}
 
 /** One selectable agent, as served by GET /api/agents. */
 interface AgentInfo {
@@ -98,6 +107,11 @@ export class OrdersApp extends LitElement {
   @state() private _agents: AgentInfo[] = [];
   @state() private _agentId =
     localStorage.getItem(AGENT_STORAGE_KEY) ?? AUTO_AGENT;
+  // Секунды текущего хода. Удалённый агент отвечает десятки секунд, поэтому
+  // ожидание должно быть видимым, а не просто крутящимся кружком.
+  @state() private _elapsed = 0;
+  #tick: ReturnType<typeof setInterval> | undefined;
+  #agentsPoll: ReturnType<typeof setInterval> | undefined;
 
   connectedCallback() {
     super.connectedCallback();
@@ -109,6 +123,16 @@ export class OrdersApp extends LitElement {
     });
     this.#client.setAgent(this._agentId);
     void this.#loadAgents();
+    // Доступность агентов меняется на ходу (перезапуск, кратковременный 503),
+    // а список грузится один раз — поэтому обновляем его периодически, иначе
+    // на живом агенте навсегда останется пометка «недоступен».
+    this.#agentsPoll = setInterval(() => void this.#loadAgents(), 30_000);
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    clearInterval(this.#agentsPoll);
+    clearInterval(this.#tick);
   }
 
   async #loadAgents() {
@@ -147,7 +171,13 @@ export class OrdersApp extends LitElement {
     run: () => Promise<{a2ui: any[]; text: string; files?: FileAttachment[]}>,
   ) {
     if (userText) this._items = [...this._items, {kind: 'user', text: userText}];
+    const startedAt = performance.now();
+    const agent = this.#busyLabel;
     this._busy = true;
+    this._elapsed = 0;
+    this.#tick = setInterval(() => {
+      this._elapsed = (performance.now() - startedAt) / 1000;
+    }, 100);
     try {
       const {a2ui, text, files} = await run();
       if (a2ui.length) {
@@ -172,7 +202,15 @@ export class OrdersApp extends LitElement {
       console.error('turn failed:', err);
       this._items = [...this._items, {kind: 'assistant', text: `Ошибка: ${err}`}];
     } finally {
+      clearInterval(this.#tick);
       this._busy = false;
+      // Время хода — и для удачного ответа, и для ошибки: «сколько мы ждали»
+      // одинаково интересно в обоих случаях.
+      this._items = [
+        ...this._items,
+        {kind: 'timing', seconds: (performance.now() - startedAt) / 1000, agent},
+      ];
+      void this.#loadAgents();
     }
   }
 
@@ -291,6 +329,12 @@ export class OrdersApp extends LitElement {
     .file-chip:hover {
       background: #eef2f6;
     }
+    .timing {
+      align-self: flex-start;
+      font-size: 12px;
+      color: #8b949e;
+      margin: -4px 0 2px;
+    }
     .thinking {
       align-self: flex-start;
       display: flex;
@@ -395,6 +439,11 @@ export class OrdersApp extends LitElement {
         <a2ui-surface .surface=${it.surface}></a2ui-surface>
       </div>`;
     }
+    if (it.kind === 'timing') {
+      return html`<div class="timing" title="время полного хода: запрос → ответ">
+        ⏱ ${it.agent} · ${formatDuration(it.seconds)}
+      </div>`;
+    }
     if (it.kind === 'file') {
       return html`<a class="file-chip" href=${it.href} download=${it.name}>
         💾 Скачать ${it.name}
@@ -429,8 +478,8 @@ export class OrdersApp extends LitElement {
             >
               <option value=${AUTO_AGENT}>Авто (выбирает модель)</option>
               ${this._agents.map(
-                (a) => html`<option value=${a.id} ?disabled=${!a.available}>
-                  ${a.name}${a.available ? '' : ' — недоступен'}
+                (a) => html`<option value=${a.id}>
+                  ${a.name}${a.available ? '' : ' — не отвечает'}
                 </option>`,
               )}
             </select>
@@ -444,6 +493,7 @@ export class OrdersApp extends LitElement {
         ${this._busy
           ? html`<div class="thinking">
               <span class="spinner"></span> ${this.#busyLabel} печатает…
+              <span class="timing">${formatDuration(this._elapsed)}</span>
             </div>`
           : nothing}
       </div>
