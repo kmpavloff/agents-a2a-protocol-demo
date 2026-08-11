@@ -130,6 +130,7 @@ func normalizeMessage(msg map[string]any, st *ingestState) (map[string]any, bool
 	if len(comps) == 0 {
 		return nil, false
 	}
+	labelButtonActions(comps)
 	// Рендерер строит дерево от компонента с id ровно "root"; без него
 	// поверхность навсегда остаётся в состоянии «Loading surface…». Чужие
 	// агенты называют корень как угодно — назначаем его сами.
@@ -144,6 +145,44 @@ func normalizeMessage(msg map[string]any, st *ingestState) (map[string]any, bool
 	next["components"] = comps
 	out["updateComponents"] = next
 	return out, true
+}
+
+// labelButtonActions дописывает в контекст действия человекочитаемую подпись
+// кнопки. Без неё клиенту нечего показать в ленте, кроме служебного имени
+// действия («return_order» вместо «Подтвердить возврат»): в самом событии
+// подписи нет, она живёт в дочернем Text.
+func labelButtonActions(comps []map[string]any) {
+	byID := make(map[string]map[string]any, len(comps))
+	for _, c := range comps {
+		if id, ok := c["id"].(string); ok {
+			byID[id] = c
+		}
+	}
+	for _, c := range comps {
+		if typ, _ := c["component"].(string); typ != "Button" {
+			continue
+		}
+		action, ok := c["action"].(map[string]any)
+		if !ok {
+			continue
+		}
+		event, ok := action["event"].(map[string]any)
+		if !ok {
+			continue
+		}
+		ctx, ok := event["context"].(map[string]any)
+		if !ok {
+			ctx = map[string]any{}
+			event["context"] = ctx
+		}
+		if _, exists := ctx["label"]; exists {
+			continue
+		}
+		child, _ := c["child"].(string)
+		if label, _ := byID[child]["text"].(string); label != "" {
+			ctx["label"] = label
+		}
+	}
 }
 
 // componentList приводит поле components к списку объектов, переживая и

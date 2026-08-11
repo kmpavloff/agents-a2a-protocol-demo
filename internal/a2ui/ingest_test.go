@@ -296,3 +296,28 @@ func TestRetagSurfaces(t *testing.T) {
 		t.Error("пустой суффикс должен возвращать набор как есть")
 	}
 }
+
+// В самом событии подписи нет — она в дочернем Text. Без неё клиент покажет в
+// ленте служебное имя действия вместо того, что человек нажал.
+func TestIngestAddsButtonLabelToActionContext(t *testing.T) {
+	comps := []any{
+		map[string]any{"id": "root", "component": "Column", "children": []any{"btn"}},
+		map[string]any{"id": "btn", "component": "Button", "child": "lbl",
+			"action": map[string]any{"event": map[string]any{
+				"name": "return_order", "context": map[string]any{"order_id": "ORD-002"}}}},
+		map[string]any{"id": "lbl", "component": "Text", "text": "Подтвердить возврат"},
+	}
+	data := []any{
+		map[string]any{"createSurface": map[string]any{"surfaceId": "s1", "catalogId": CatalogID}},
+		map[string]any{"updateComponents": map[string]any{"surfaceId": "s1", "components": comps}},
+	}
+	msgs := Ingest([]Part{{MediaType: MIMEType, Data: data}})
+	btn := componentsByID(msgs)["btn"]
+	ctx := btn["action"].(map[string]any)["event"].(map[string]any)["context"].(map[string]any)
+	if ctx["label"] != "Подтвердить возврат" {
+		t.Errorf("подпись кнопки не попала в контекст: %v", ctx)
+	}
+	if ctx["order_id"] != "ORD-002" {
+		t.Errorf("исходный контекст потерян: %v", ctx)
+	}
+}

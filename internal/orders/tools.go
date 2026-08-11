@@ -135,6 +135,7 @@ func (a idArgs) orderID() string {
 	}
 	return ""
 }
+
 // customerArgs, like idArgs, accepts the client name under several key names
 // because small models often invent synonyms instead of the documented
 // customer. All fields are optional; the runtime guard reports a missing name.
@@ -154,6 +155,7 @@ func (a customerArgs) customer() string {
 	}
 	return ""
 }
+
 type periodArgs struct {
 	Period string `json:"period" description:"Период в формате ГГГГ-ММ"`
 }

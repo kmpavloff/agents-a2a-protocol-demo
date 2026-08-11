@@ -178,7 +178,7 @@ func Run(ctx context.Context, r *runner.Runner, ws WidgetSource) error {
 		})
 		// Files (e.g. the refund receipt) are saved next to the REPL and the
 		// path is printed, since a terminal cannot "download" anything.
-		ws.SetFileHandler(func(_ , filename, _ string, data []byte) {
+		ws.SetFileHandler(func(_, filename, _ string, data []byte) {
 			path, err := saveFile(filename, data)
 			if err != nil {
 				fmt.Printf("%s[файл %s не сохранён: %v]%s\n", gray, filename, err, reset)

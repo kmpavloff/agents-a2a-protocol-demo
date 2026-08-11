@@ -283,7 +283,11 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 		// own latency on top of the remote agent's.
 		if remote, ok := e.reg.Get(agentID); ok && agentID != autoAgentID && remote.Verbatim() {
 			if actionName != "" {
+				// Пересобираем текст под агента, говорящего только словами, и
+				// пишем в трейс именно то, что уйдёт: иначе выше уже записан
+				// другой вариант, и лог противоречит проводу.
 				userText = actionToPrompt(actionName, actionCtx)
+				e.trace.Logf("  A2UI action %q → текст для агента: %q", actionName, safeActionEcho(actionName, userText))
 			}
 			e.trace.Logf("  verbatim agent %q → no local LLM", agentID)
 			reply, err := remote.Ask(ctx, sessionID, userText)
