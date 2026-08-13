@@ -443,7 +443,7 @@ func (r *Remote) acceptsA2UI() bool {
 		}
 	}
 	for _, ext := range r.card.Capabilities.Extensions {
-		if ext.URI == a2ui.ExtensionURI {
+		if ext.URI == a2ui.ExtensionURI || ext.URI == a2ui.LegacyExtensionURI {
 			return true
 		}
 	}
@@ -466,9 +466,23 @@ func (r *Remote) PendingTaskID(sessionID string) a2a.TaskID {
 	return r.pending[sessionID].taskID
 }
 
-// Ask отправляет агенту одно сообщение и возвращает его ответ. Если у сессии
-// есть зависшая input-required задача, сообщение продолжает именно её.
+// Ask отправляет агенту одно текстовое сообщение и возвращает его ответ. Если у
+// сессии есть зависшая input-required задача, сообщение продолжает именно её.
 func (r *Remote) Ask(ctx context.Context, sessionID, text string) (Reply, error) {
+	return r.ask(ctx, sessionID, a2a.NewTextPart(text), text)
+}
+
+// AskAction отправляет агенту нажатие кнопки — штатным событием A2UI, а не
+// пересказом на человеческом языке. Так это описывает схема client_to_server, и
+// так его ждёт агент, собранный на любом из референсных SDK.
+func (r *Remote) AskAction(ctx context.Context, sessionID, name, surfaceID, sourceComponentID string, actx map[string]any) (Reply, error) {
+	part := newActionPart(name, surfaceID, sourceComponentID, actx, time.Now())
+	return r.ask(ctx, sessionID, part, "action "+name)
+}
+
+// ask — общий путь обоих способов обратиться к агенту. echo попадает только в
+// трейс: части бывают не текстовые, а лог должен показывать, что именно ушло.
+func (r *Remote) ask(ctx context.Context, sessionID string, outgoing *a2a.Part, echo string) (Reply, error) {
 	if err := r.Connect(ctx); err != nil {
 		return Reply{}, err
 	}
@@ -482,10 +496,9 @@ func (r *Remote) Ask(ctx context.Context, sessionID, text string) (Reply, error)
 	ctx, cancel := context.WithTimeout(ctx, r.cfg.TimeoutDuration())
 	defer cancel()
 
-	// Сказать агенту, что клиент умеет рендерить generative UI. Без этого он
-	// решает сам, и на части ходов отвечает только текстом. Два канала сразу:
-	// acceptedOutputModes из A2A-запроса и заголовок A2A-Extensions — именно им
-	// договаривается с нами наш собственный браузер.
+	// Сказать агенту, что клиент умеет рендерить generative UI: заголовок
+	// расширения (обоими именами, см. withExt) и a2uiClientCapabilities ниже.
+	// Именно эту пару спека расширения называет способом договориться.
 	if r.acceptsA2UI() {
 		ctx = withExt(ctx)
 	}
@@ -496,17 +509,26 @@ func (r *Remote) Ask(ctx context.Context, sessionID, text string) (Reply, error)
 	if hasPending {
 		r.trace.Logf("    resuming input-required task | taskID=%s contextID=%s", p.taskID, p.contextID)
 		msg = a2a.NewMessageForTask(a2a.MessageRoleUser,
-			a2a.TaskInfo{TaskID: p.taskID, ContextID: p.contextID}, a2a.NewTextPart(text))
+			a2a.TaskInfo{TaskID: p.taskID, ContextID: p.contextID}, outgoing)
 	} else {
-		msg = a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(text))
+		msg = a2a.NewMessage(a2a.MessageRoleUser, outgoing)
 		if contextID != "" {
 			msg.ContextID = contextID
 		}
 	}
+	meta := map[string]any{}
 	// metadata.skill включает у внешнего агента инструменты нужного навыка;
 	// без него он отвечает только текстом.
 	if r.cfg.Skill != "" {
-		msg.Metadata = map[string]any{"skill": r.cfg.Skill}
+		meta["skill"] = r.cfg.Skill
+	}
+	// Какие каталоги умеет наш рендерер. Штатный признак «клиент говорит на
+	// A2UI»: acceptedOutputModes спека таким признаком не считает.
+	if r.acceptsA2UI() {
+		meta["a2uiClientCapabilities"] = a2ui.ClientCapabilities()
+	}
+	if len(meta) > 0 {
+		msg.Metadata = meta
 	}
 	// contextId в трейсе — потому что «агент забывает разговор» это первый
 	// вопрос, который приходится проверять, а без него не видно, передаём ли мы
@@ -518,10 +540,12 @@ func (r *Remote) Ask(ctx context.Context, sessionID, text string) (Reply, error)
 	if sentCtx == "" {
 		sentCtx = "(новый разговор)"
 	}
-	r.trace.Logf("    SendMessage role=user skill=%q contextId=%s text=%q", r.cfg.Skill, sentCtx, text)
+	r.trace.Logf("    SendMessage role=user skill=%q contextId=%s text=%q", r.cfg.Skill, sentCtx, echo)
 
 	req := &a2a.SendMessageRequest{Message: msg}
 	if r.acceptsA2UI() {
+		// Поле родное для A2A и агенту не мешает; триггером A2UI оно, по спеке
+		// расширения, не является — им служат заголовок и capabilities выше.
 		req.Config = &a2a.SendMessageConfig{
 			AcceptedOutputModes: []string{"text/plain", a2ui.MIMEType},
 		}
@@ -547,14 +571,14 @@ func (r *Remote) Ask(ctx context.Context, sessionID, text string) (Reply, error)
 			r.contexts[sessionID] = v.ContextID
 			r.mu.Unlock()
 		}
-		return r.replyFromParts(v.Parts, ""), nil
+		return r.replyFromParts(v.Parts, nil, ""), nil
 
 	case *a2a.Task:
 		task, err := r.awaitTerminal(ctx, client, v)
 		if err != nil {
 			return Reply{}, err
 		}
-		return r.replyFromTask(sessionID, task), nil
+		return r.replyFromTask(sessionID, task)
 
 	default:
 		r.trace.Logf("    ✖ unexpected A2A result type %T", res)
@@ -588,7 +612,12 @@ func (r *Remote) awaitTerminal(ctx context.Context, client *a2aclient.Client, ta
 
 // replyFromTask собирает ответ из терминальной задачи и запоминает состояние
 // сессии.
-func (r *Remote) replyFromTask(sessionID string, task *a2a.Task) Reply {
+//
+// Провалившаяся задача возвращается ошибкой, а не ответом: агент в этом случае
+// кладёт в статусное сообщение причину отказа («timed out» и подобное), и без
+// разделения она попадала бы в ленту как обычная реплика — пользователь видел
+// бы сбой агента в виде ответа на свой вопрос.
+func (r *Remote) replyFromTask(sessionID string, task *a2a.Task) (Reply, error) {
 	r.trace.Logf("◀── response: Task | id=%s contextID=%s state=%s", task.ID, task.ContextID, task.Status.State)
 
 	r.mu.Lock()
@@ -603,10 +632,17 @@ func (r *Remote) replyFromTask(sessionID string, task *a2a.Task) Reply {
 	r.mu.Unlock()
 
 	if task.Status.State == a2a.TaskStateInputRequired {
-		reply := r.replyFromParts(statusParts(task), statusMessageText(task))
+		reply := r.replyFromParts(statusParts(task), nil, statusMessageText(task))
 		reply.NeedsInput = true
 		r.trace.Logf("    ⏸ input-required — stored pending task, asking user: %q", reply.Text)
-		return reply
+		return reply, nil
+	}
+
+	switch task.Status.State {
+	case a2a.TaskStateFailed, a2a.TaskStateRejected, a2a.TaskStateCanceled:
+		why := strings.TrimSpace(statusMessageText(task))
+		r.trace.Logf("    ✖ задача завершилась неуспехом: state=%s reason=%q", task.Status.State, why)
+		return Reply{}, fmt.Errorf("agent %q turn failed (%s): %s", r.cfg.ID, task.Status.State, why)
 	}
 
 	// Текст берём из статусного сообщения, если агент положил его туда
@@ -619,8 +655,7 @@ func (r *Remote) replyFromTask(sessionID string, task *a2a.Task) Reply {
 			fallback = txt
 		}
 	}
-	parts := append(append([]*a2a.Part{}, artifactParts(task)...), statusParts(task)...)
-	reply := r.replyFromParts(parts, fallback)
+	reply := r.replyFromParts(statusParts(task), artifactParts(task), fallback)
 	r.trace.Logf("    ✔ terminal state | text=%q a2ui=%d widgets=%d files=%d",
 		reply.Text, len(reply.A2UI), len(reply.Widgets), len(reply.Files))
 	if len(reply.A2UI) == 0 && len(reply.Widgets) == 0 && r.acceptsA2UI() {
@@ -628,16 +663,22 @@ func (r *Remote) replyFromTask(sessionID string, task *a2a.Task) Reply {
 		// мы его запросили, но на этом ходу он решил ответить только текстом.
 		r.trace.Logf("    ⓘ агент объявляет A2UI и получил запрос на него, но в этом ответе прислал только текст — виджета не будет")
 	}
-	return reply
+	return reply, nil
 }
 
 // replyFromParts раскладывает части ответа по слоям: текст, A2UI, доменные
 // виджеты и файлы.
-func (r *Remote) replyFromParts(parts []*a2a.Part, fallback string) Reply {
+//
+// statusP и artifactP разделены из-за A2UI: спека расширения кладёт разметку в
+// части сообщения, и оттуда её читает стандартный клиент. Артефакт — второе
+// место, куда её кладут живые агенты; берём его, только если в сообщении
+// разметки не было, иначе поверхность приехала бы дважды.
+func (r *Remote) replyFromParts(statusP, artifactP []*a2a.Part, fallback string) Reply {
+	parts := append(append([]*a2a.Part{}, artifactP...), statusP...)
 	reply := Reply{Text: fallback}
 	if reply.Text == "" {
 		for _, p := range parts {
-			if p == nil || p.MediaType == a2ui.MIMEType {
+			if p == nil || isA2UIPart(p) {
 				continue
 			}
 			if txt := p.Text(); txt != "" {
@@ -649,7 +690,9 @@ func (r *Remote) replyFromParts(parts []*a2a.Part, fallback string) Reply {
 	if strings.TrimSpace(reply.Text) == "" {
 		reply.Text = "Готово."
 	}
-	reply.A2UI = a2ui.Ingest(a2uiParts(parts))
+	if reply.A2UI = a2ui.Ingest(a2uiParts(statusP)); len(reply.A2UI) == 0 {
+		reply.A2UI = a2ui.Ingest(a2uiParts(artifactP))
+	}
 	if w := firstWidget(parts); w != nil {
 		reply.Widgets = append(reply.Widgets, w)
 	}
@@ -662,19 +705,6 @@ func (r *Remote) replyFromParts(parts []*a2a.Part, fallback string) Reply {
 		}
 	}
 	return reply
-}
-
-// a2uiParts переводит A2A-части в транспортно-независимый вид, понятный
-// пакету a2ui.
-func a2uiParts(parts []*a2a.Part) []a2ui.Part {
-	out := make([]a2ui.Part, 0, len(parts))
-	for _, p := range parts {
-		if p == nil {
-			continue
-		}
-		out = append(out, a2ui.Part{MediaType: p.MediaType, Text: p.Text(), Data: p.Data()})
-	}
-	return out
 }
 
 // clearPending забывает зависшую задачу сессии.
@@ -730,7 +760,7 @@ func firstWidget(parts []*a2a.Part) map[string]any {
 // application/a2ui+json, и показывать её пользователю нельзя.
 func firstProseText(parts []*a2a.Part) string {
 	for _, p := range parts {
-		if p == nil || p.MediaType == a2ui.MIMEType {
+		if p == nil || isA2UIPart(p) {
 			continue
 		}
 		if txt := p.Text(); txt != "" {

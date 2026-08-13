@@ -67,4 +67,53 @@ func TestLiveRemoteAgent(t *testing.T) {
 			}
 		}
 	}
+
+	// Второй ход — нажатие кнопки, если агент её прислал. Единственная
+	// автоматическая проверка того, что он разбирает штатное событие A2UI, а не
+	// только пересказ действия словами.
+	name, surfaceID, componentID, actx, ok := firstLiveButton(reply.A2UI)
+	if !ok {
+		t.Log("кнопок в ответе нет — событие A2UI не проверялось")
+		return
+	}
+	t.Logf("нажимаю кнопку %q поверхности %q", name, surfaceID)
+	actionReply, err := r.AskAction(context.Background(), "live-session", name, surfaceID, componentID, actx)
+	if err != nil {
+		t.Fatalf("AskAction: %v", err)
+	}
+	if actionReply.Text == "" {
+		t.Error("на событие A2UI агент не ответил текстом")
+	}
+	t.Logf("ответ на действие: %s", actionReply.Text)
+}
+
+// firstLiveButton находит в наборе A2UI первую кнопку с действием и возвращает
+// всё, что нужно, чтобы это действие отправить.
+func firstLiveButton(msgs []map[string]any) (name, surfaceID, componentID string, ctx map[string]any, ok bool) {
+	for _, m := range msgs {
+		uc, isUpdate := m["updateComponents"].(map[string]any)
+		if !isUpdate {
+			continue
+		}
+		sid, _ := uc["surfaceId"].(string)
+		comps, _ := uc["components"].([]map[string]any)
+		for _, c := range comps {
+			if typ, _ := c["component"].(string); typ != "Button" {
+				continue
+			}
+			action, _ := c["action"].(map[string]any)
+			event, _ := action["event"].(map[string]any)
+			n, _ := event["name"].(string)
+			if n == "" {
+				continue
+			}
+			cctx, _ := event["context"].(map[string]any)
+			if cctx == nil {
+				cctx = map[string]any{}
+			}
+			id, _ := c["id"].(string)
+			return n, sid, id, cctx, true
+		}
+	}
+	return "", "", "", nil, false
 }

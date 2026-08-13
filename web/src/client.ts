@@ -1,7 +1,36 @@
 import {ClientFactory, type Client} from '@a2a-js/sdk/client';
 import type {Message, Part, Task, SendMessageResult} from '@a2a-js/sdk';
 
-const A2UI_EXT = 'https://a2ui.org/a2a-extension/a2ui/v0.9';
+// Ревизия A2UI, на которой мы говорим, и её предшественница: полезная нагрузка
+// у них общая, но URI разные, и агент, знающий только 0.9, по одному лишь новому
+// имени нас за рисующего клиента не примет. v1.0 существует, но это
+// релиз-кандидат — пока не берём.
+const A2UI_EXT = 'https://a2ui.org/a2a-extension/a2ui/v0.9.1';
+const A2UI_EXT_LEGACY = 'https://a2ui.org/a2a-extension/a2ui/v0.9';
+// Значение поля version в сообщениях: схемы 0.9.1 объявляют его enum'ом из двух.
+const A2UI_VERSION = 'v0.9.1';
+// Ключ внутри a2uiClientCapabilities — именно "v0.9": другого свойства схема
+// возможностей клиента не знает даже в наборе 0.9.1.
+const A2UI_CAPS_KEY = 'v0.9';
+const A2UI_MIME = 'application/a2ui+json';
+// Тип из ранних сборок A2UI. Только принимаем — отдаём всегда A2UI_MIME.
+const A2UI_MIME_LEGACY = 'application/json+a2ui';
+const A2UI_CATALOG = 'https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json';
+
+/**
+ * Несёт ли часть разметку A2UI. Спека расширения помечает её metadata.mimeType;
+ * mediaType — родное поле A2A, которым пользуемся мы сами и живые агенты.
+ * Принимаем обе пометки и оба типа, отдаём всегда metadata.mimeType.
+ */
+function isA2UIPart(p: any): boolean {
+  const mime = p?.metadata?.mimeType ?? p?.mediaType;
+  return mime === A2UI_MIME || mime === A2UI_MIME_LEGACY;
+}
+
+/** Разворачивает полезную нагрузку A2UI-части: по спеке это массив сообщений. */
+function a2uiMessages(value: unknown): any[] {
+  return Array.isArray(value) ? value : value == null ? [] : [value];
+}
 
 // ROLE_USER in the A2A v1.0 proto enum (@a2a-js/sdk v1.0.0-beta.0).
 const ROLE_USER = 1;
@@ -121,9 +150,15 @@ export class A2UIClient {
       role: ROLE_USER,
       parts,
       ...(this.#contextId ? {contextId: this.#contextId} : {}),
-      // The chosen agent rides in the message metadata — the same mechanism
-      // A2A agents use for extension-specific hints.
-      ...(this.#agentId !== 'auto' ? {metadata: {agentId: this.#agentId}} : {}),
+      metadata: {
+        // The chosen agent rides in the message metadata — the same mechanism
+        // A2A agents use for extension-specific hints.
+        ...(this.#agentId !== 'auto' ? {agentId: this.#agentId} : {}),
+        // Какие каталоги умеет наш рендерер. Вместе с заголовком расширения
+        // это штатный признак «клиент говорит на A2UI»; acceptedOutputModes
+        // спека таким признаком не считает.
+        a2uiClientCapabilities: {[A2UI_CAPS_KEY]: {supportedCatalogIds: [A2UI_CATALOG]}},
+      },
     } as unknown as Message;
 
     const result: SendMessageResult = await client.sendMessage(
@@ -132,26 +167,48 @@ export class A2UIClient {
       // the rest), so cast past the over-strict type.
       {message} as any,
       // Request the A2UI extension. a2a-go reads the header named exactly
-      // "A2A-Extensions" (keys are lowercased server-side for lookup).
-      {serviceParameters: {'A2A-Extensions': A2UI_EXT} as any},
+      // "A2A-Extensions" (keys are lowercased server-side for lookup);
+      // X-A2A-Extensions — то же под именем, которое знает спека A2UI v0.9.
+      // Ровно один URI: два значения в одном заголовке несовместимы между
+      // реализациями — a2a-go сравнивает строку целиком и запятых не разбирает,
+      // Spring в Java-порте, наоборот, разбивает по ним. Шлём предыдущую
+      // ревизию: её понимают оба наших оркестратора, а Go-порт принимает и
+      // новую. Сами сообщения при этом идут в 0.9.1 — на согласование
+      // расширения это не влияет.
+      {
+        serviceParameters: {
+          'A2A-Extensions': A2UI_EXT_LEGACY,
+          'X-A2A-Extensions': A2UI_EXT_LEGACY,
+        } as any,
+      },
     );
 
-    // The orchestrator always returns a Task (submitted → working → artifact →
+    // The orchestrator always returns a Task (submitted → working →
     // completed). Reuse ONLY its contextId for follow-up turns: the task is
     // terminal at the end of each turn, so referencing its taskId would be
     // rejected; the shared contextId keeps the orchestrator session stable.
     const task = result as Task;
     if (task.contextId) this.#contextId = task.contextId;
 
+    // Части завершающего сообщения — место, куда их кладёт спека расширения.
+    // Артефакт остаётся запасным путём: так отвечают агенты, писавшиеся до
+    // неё, включая наш Java-порт.
+    const status = (task.status as any)?.message?.parts;
+    const replyParts = status?.length
+      ? status
+      : (task.artifacts?.[task.artifacts.length - 1]?.parts ?? []);
+
     // A2A v1.0 parts are a proto oneof: `part.content = {$case, value}`.
-    const artifact = task.artifacts?.[task.artifacts.length - 1];
     const a2ui: any[] = [];
     const files: FileAttachment[] = [];
     let text = '';
-    for (const p of artifact?.parts ?? []) {
+    for (const p of replyParts) {
       const c = (p as any).content;
-      if (c?.$case === 'data') a2ui.push(c.value);
-      else if (c?.$case === 'text') text += c.value;
+      if (c?.$case === 'data') {
+        // Чужая data-часть (например доменный виджет) — не A2UI: отдать её
+        // рендереру значит показать пользователю мусор.
+        if (isA2UIPart(p)) a2ui.push(...a2uiMessages(c.value));
+      } else if (c?.$case === 'text') text += c.value;
       else if (c?.$case === 'raw') {
         // A downloadable file (e.g. the refund receipt).
         files.push({
@@ -168,11 +225,30 @@ export class A2UIClient {
     return this.#send([{content: {$case: 'text', value: text}} as unknown as Part]);
   }
 
-  sendAction(name: string, context: Record<string, any>): Promise<SendResult> {
+  /**
+   * Нажатие кнопки — событие по схеме client_to_server: одно сообщение внутри
+   * массива, тип в metadata.mimeType. Все пять полей действия схема объявляет
+   * обязательными, поэтому пустые surfaceId/sourceComponentId пустеют, а не
+   * исчезают — иначе payload не пройдёт валидацию на стороне агента.
+   */
+  sendAction(
+    name: string,
+    context: Record<string, any>,
+    surfaceId = '',
+    sourceComponentId = '',
+  ): Promise<SendResult> {
+    const action = {
+      name,
+      surfaceId,
+      sourceComponentId,
+      timestamp: new Date().toISOString(),
+      context,
+    };
     return this.#send([
       {
-        content: {$case: 'data', value: {version: 'v0.9', action: {name, context}}},
-        mediaType: 'application/a2ui+json',
+        content: {$case: 'data', value: [{version: A2UI_VERSION, action}]},
+        mediaType: A2UI_MIME,
+        metadata: {mimeType: A2UI_MIME},
       } as unknown as Part,
     ]);
   }

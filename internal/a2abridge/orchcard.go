@@ -17,9 +17,14 @@ func OrchestratorCard(publicURL string) *a2a.AgentCard {
 		DefaultInputModes:  []string{"text/plain"},
 		DefaultOutputModes: []string{"text/plain"},
 		Capabilities: a2a.AgentCapabilities{
+			// Обе ревизии: полезная нагрузка у них общая, а клиент, знающий
+			// только 0.9, по одному лишь URI 0.9.1 нас за A2UI-агента не примет.
 			Extensions: []a2a.AgentExtension{{
 				URI:         a2ui.ExtensionURI,
 				Description: "Отдаёт интерфейс через A2UI (generative UI).",
+			}, {
+				URI:         a2ui.LegacyExtensionURI,
+				Description: "То же в терминах предыдущей ревизии A2UI.",
 			}},
 		},
 		SupportedInterfaces: []*a2a.AgentInterface{

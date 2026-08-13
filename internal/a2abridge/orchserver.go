@@ -247,12 +247,19 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 			nParts = len(ec.Message.Parts)
 		}
 
-		// Activate the A2UI extension if the client requested it.
+		// Activate the A2UI extension if the client requested it — под любым из
+		// двух имён ревизии: клиент на 0.9 попросит старый URI, и отказать ему
+		// значило бы ответить голым текстом на ровном месте.
 		a2uiActive := false
-		ext := &a2a.AgentExtension{URI: a2ui.ExtensionURI}
-		if exts, ok := a2asrv.ExtensionsFrom(ctx); ok && exts.Requested(ext) {
-			exts.Activate(ext)
-			a2uiActive = true
+		if exts, ok := a2asrv.ExtensionsFrom(ctx); ok {
+			for _, uri := range []string{a2ui.ExtensionURI, a2ui.LegacyExtensionURI} {
+				ext := &a2a.AgentExtension{URI: uri}
+				if exts.Requested(ext) {
+					exts.Activate(ext)
+					a2uiActive = true
+					break
+				}
+			}
 		}
 		e.trace.Logf("▶ orchestrator A2A request | contextID=%s a2ui=%v inParts=%d stored=%v",
 			sessionID, a2uiActive, nParts, ec.StoredTask != nil)
@@ -269,18 +276,23 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 		// Parse input: an A2UI action DataPart, or plain text.
 		userText := ""
 		actionName := ""
+		actionSurface := ""
+		actionSource := ""
 		actionCtx := map[string]any{}
 		if ec.Message != nil {
 			for _, p := range ec.Message.Parts {
-				if data, ok := p.Data().(map[string]any); ok {
-					if name, actx, ok := a2ui.ParseAction(data); ok {
-						actionName = name
-						actionCtx = actx
-						userText = actionToText(name, actx)
-						e.trace.Logf("  A2UI action %q ctx=%s → user text %q",
-							name, compactArgs(redactCard(actx)), safeActionEcho(name, userText))
-						break
-					}
+				if name, actx, ok := a2ui.ParseAction(p.Data()); ok {
+					actionName = name
+					actionCtx = actx
+					actionSurface, actionSource = a2ui.ActionOrigin(p.Data())
+					// Событием действие уходит только verbatim-агенту. Всё
+					// остальное — HITL-возврат и делегирование через модель —
+					// работает текстом, и в нём должен быть контекст: без него
+					// модель видит «нажал return_order» и не знает, какой заказ.
+					userText = actionToPrompt(name, actx)
+					e.trace.Logf("  A2UI action %q ctx=%s → user text %q",
+						name, compactArgs(redactCard(actx)), safeActionEcho(name, userText))
+					break
 				}
 				if t := p.Text(); t != "" {
 					userText = t
@@ -295,17 +307,18 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 		// Reset this session's slots before the run.
 		e.drain(sessionID)
 
+		// Ответ уезжает частями завершающего сообщения задачи: там их ищет спека
+		// расширения A2UI, и оттуда их читает референсный клиент
+		// (result.status.message.parts). Артефакт для этого не предназначен.
 		emit := func(text string, ws, msgs []map[string]any, fs []attachedFile, what string) {
 			parts := []*a2a.Part{a2a.NewTextPart(strings.TrimSpace(orDefault(text, "Готово.")))}
 			parts = append(parts, e.a2uiParts(a2uiActive, ws)...)
 			parts = append(parts, e.a2uiMessageParts(a2uiActive, msgs, turn)...)
 			parts = append(parts, fileParts(fs)...)
-			e.trace.Logf("  → emit: artifact + completed | %s | parts=%d requestTook=%s",
+			e.trace.Logf("  → emit: completed message | %s | parts=%d requestTook=%s",
 				what, len(parts), time.Since(reqStart).Round(time.Millisecond))
-			if !yield(a2a.NewArtifactEvent(ec, parts...), nil) {
-				return
-			}
-			yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateCompleted, nil), nil)
+			reply := a2a.NewMessageForTask(a2a.MessageRoleAgent, ec, parts...)
+			yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateCompleted, reply), nil)
 		}
 
 		// An explicitly chosen verbatim agent answers the user directly: its text
@@ -313,15 +326,23 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 		// answer that is already final would only paraphrase it away and add its
 		// own latency on top of the remote agent's.
 		if remote, ok := e.reg.Get(agentID); ok && agentID != autoAgentID && remote.Verbatim() {
-			if actionName != "" {
-				// Пересобираем текст под агента, говорящего только словами, и
-				// пишем в трейс именно то, что уйдёт: иначе выше уже записан
-				// другой вариант, и лог противоречит проводу.
-				userText = actionToPrompt(actionName, actionCtx)
-				e.trace.Logf("  A2UI action %q → текст для агента: %q", actionName, safeActionEcho(actionName, userText))
-			}
 			e.trace.Logf("  verbatim agent %q → no local LLM", agentID)
-			reply, err := remote.Ask(ctx, sessionID, userText)
+			var reply Reply
+			var err error
+			if actionName != "" {
+				// Нажатие уезжает штатным событием A2UI: пересказ словами
+				// понимает только модель, а событие — любой агент на
+				// референсном SDK.
+				// Поверхность возвращается агенту под его собственным именем: в
+				// ленте она переименована по ходам (см. a2uiMessageParts), а
+				// сопоставить событие агент может только со своим id.
+				surface := a2ui.UntagSurface(actionSurface)
+				e.trace.Logf("  A2UI action %q → событие агенту | surface=%q source=%q ctx=%s",
+					actionName, surface, actionSource, compactArgs(redactCard(actionCtx)))
+				reply, err = remote.AskAction(ctx, sessionID, actionName, surface, actionSource, actionCtx)
+			} else {
+				reply, err = remote.Ask(ctx, sessionID, userText)
+			}
 			if err != nil {
 				e.trace.Logf("  ✖ verbatim turn failed: %v", err)
 				emit(fmt.Sprintf("Агент %q недоступен: %v", remote.Name(), err), nil, nil, nil, "verbatim error")
@@ -495,11 +516,7 @@ func (e *orchExecutor) a2uiParts(a2uiActive bool, ws []map[string]any) []*a2a.Pa
 	for _, w := range ws {
 		if msgs, ok := a2ui.FromWidget(w); ok {
 			e.trace.Logf("  A2UI: widget %v → %d message(s) (application/a2ui+json)", w["_kind"], len(msgs))
-			for _, m := range msgs {
-				part := a2a.NewDataPart(m)
-				part.MediaType = a2ui.MIMEType
-				parts = append(parts, part)
-			}
+			parts = append(parts, newA2UIPart(msgs))
 		}
 	}
 	return parts
@@ -518,16 +535,11 @@ func (e *orchExecutor) a2uiMessageParts(a2uiActive bool, msgs []map[string]any, 
 	// Каждый ход — своя поверхность: в ленте это отдельная карточка, а
 	// повторный createSurface с тем же id рендерер не переживает.
 	msgs = a2ui.RetagSurfaces(msgs, fmt.Sprintf("-t%d", turn))
-	parts := make([]*a2a.Part, 0, len(msgs))
-	for _, m := range msgs {
-		part := a2a.NewDataPart(m)
-		part.MediaType = a2ui.MIMEType
-		parts = append(parts, part)
+	if len(msgs) == 0 {
+		return nil
 	}
-	if len(parts) > 0 {
-		e.trace.Logf("  A2UI: %d message(s) from the agent passed through (application/a2ui+json)", len(parts))
-	}
-	return parts
+	e.trace.Logf("  A2UI: %d message(s) from the agent passed through (application/a2ui+json)", len(msgs))
+	return []*a2a.Part{newA2UIPart(msgs)}
 }
 
 // fileParts passes worker-attached files through as A2A raw parts (attached
@@ -546,11 +558,20 @@ func fileParts(fs []attachedFile) []*a2a.Part {
 // withExt returns a context carrying a service-param request to activate the
 // A2UI A2A extension, the mechanism a2a-go v2.3.1 clients use to convey
 // requested extensions (there is no field on SendMessageRequest for this).
+//
+// Заголовок уходит под двумя именами. A2A 1.0 зовёт его A2A-Extensions, а спека
+// A2UI v0.9 писалась под ранний A2A и знает только X-A2A-Extensions: агент,
+// собранный по ней, второго имени не увидит.
 func withExt(ctx context.Context) context.Context {
+	uris := []string{a2ui.ExtensionURI, a2ui.LegacyExtensionURI}
 	return a2aclient.AttachServiceParams(ctx, a2aclient.ServiceParams{
-		a2a.SvcParamExtensions: []string{a2ui.ExtensionURI},
+		a2a.SvcParamExtensions: uris,
+		legacyExtHeader:        uris,
 	})
 }
+
+// legacyExtHeader — имя заголовка расширений до A2A 1.0; его называет спека A2UI v0.9.
+const legacyExtHeader = "X-" + a2a.SvcParamExtensions
 
 // A2UIProbe is a minimal A2A client that activates the A2UI extension and
 // returns the parts of the resulting task artifact. Used by the browser bridge
@@ -588,7 +609,9 @@ func NewA2UIProbe(ctx context.Context, url string) (*A2UIProbe, error) {
 
 // send delivers part to the agent, carrying over the previously seen
 // contextID (if any) so the orchestrator resumes the same session, and
-// returns the parts of the resulting task's last artifact.
+// returns the parts of the resulting task's completing message — то место, куда
+// их кладёт спека расширения. Артефакт остаётся запасным путём: так отвечают
+// агенты, писавшиеся до неё, включая наш Java-порт.
 func (p *A2UIProbe) send(ctx context.Context, part *a2a.Part) ([]*a2a.Part, error) {
 	msg := a2a.NewMessage(a2a.MessageRoleUser, part)
 	if p.contextID != "" {
@@ -608,6 +631,9 @@ func (p *A2UIProbe) send(ctx context.Context, part *a2a.Part) ([]*a2a.Part, erro
 	if task.ContextID != "" {
 		p.contextID = task.ContextID
 	}
+	if task.Status.Message != nil && len(task.Status.Message.Parts) > 0 {
+		return task.Status.Message.Parts, nil
+	}
 	if len(task.Artifacts) > 0 {
 		return task.Artifacts[len(task.Artifacts)-1].Parts, nil
 	}
@@ -621,10 +647,5 @@ func (p *A2UIProbe) SendText(ctx context.Context, text string) ([]*a2a.Part, err
 
 // SendAction sends an A2UI button action back to the agent over A2A.
 func (p *A2UIProbe) SendAction(ctx context.Context, name string, actx map[string]any) ([]*a2a.Part, error) {
-	part := a2a.NewDataPart(map[string]any{
-		"version": a2ui.Version,
-		"action":  map[string]any{"name": name, "context": actx},
-	})
-	part.MediaType = a2ui.MIMEType
-	return p.send(ctx, part)
+	return p.send(ctx, newActionPart(name, "", "", actx, time.Now()))
 }

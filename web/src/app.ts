@@ -122,7 +122,12 @@ export class OrdersApp extends LitElement {
     );
       const label = (action.context?.label as string) || action.name;
       await this.#turn(label, () =>
-        this.#client.sendAction(action.name, action.context ?? {}),
+        this.#client.sendAction(
+          action.name,
+          action.context ?? {},
+          action.surfaceId,
+          action.sourceComponentId,
+        ),
       );
     });
   }

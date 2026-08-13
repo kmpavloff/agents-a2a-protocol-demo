@@ -19,8 +19,8 @@ func TestFromWidgetConfirmation(t *testing.T) {
 	if len(msgs) != 2 {
 		t.Fatalf("want 2 messages (createSurface, updateComponents), got %d", len(msgs))
 	}
-	if msgs[0]["version"] != "v0.9" || msgs[0]["createSurface"] == nil {
-		t.Errorf("msg0 must be a v0.9 createSurface, got %#v", msgs[0])
+	if msgs[0]["version"] != Version || msgs[0]["createSurface"] == nil {
+		t.Errorf("msg0 must be a %s createSurface, got %#v", Version, msgs[0])
 	}
 	uc, _ := msgs[1]["updateComponents"].(map[string]any)
 	if uc == nil {

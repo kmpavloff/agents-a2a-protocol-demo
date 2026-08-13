@@ -29,8 +29,8 @@ agents:
   # - id: ouroboros
   #   name: "Ouroboros · магазин"
   #   url: "http://192.168.1.68:18800"
-  #   # Карточка не по каноническому пути /.well-known/agent-card.json.
-  #   card_path: "/.well-known/agent.json"
+  #   # card_path нужен только если карточка лежит не по каноническому пути
+  #   # /.well-known/agent-card.json — так было у этого агента до 2026-08-12.
   #   # Уезжает в metadata.skill каждого сообщения: так агент понимает, какой
   #   # набор инструментов включить.
   #   skill: "shop"

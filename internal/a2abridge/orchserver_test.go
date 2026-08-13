@@ -111,7 +111,7 @@ func TestOrchestratorEmitsA2UIWidget(t *testing.T) {
 
 	var a2uiParts int
 	for _, p := range parts {
-		if p != nil && p.MediaType == a2ui.MIMEType {
+		if isA2UIPart(p) {
 			a2uiParts++
 		}
 	}
@@ -184,17 +184,32 @@ func TestOrchestratorActionResumesRefund(t *testing.T) {
 	}
 }
 
-// hasA2UIComponent reports whether any A2UI DataPart among parts contains a
+// a2uiMessages собирает A2UI-сообщения из частей ответа. Часть по спеке одна на
+// набор, а её data — массив сообщений, поэтому наборы склеиваются.
+func a2uiMessages(parts []*a2a.Part) []map[string]any {
+	var out []map[string]any
+	for _, p := range parts {
+		if !isA2UIPart(p) {
+			continue
+		}
+		switch v := p.Data().(type) {
+		case []any:
+			for _, item := range v {
+				if m, ok := item.(map[string]any); ok {
+					out = append(out, m)
+				}
+			}
+		case map[string]any:
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// hasA2UIComponent reports whether any A2UI part among parts contains a
 // component of the given type.
 func hasA2UIComponent(parts []*a2a.Part, component string) bool {
-	for _, p := range parts {
-		if p == nil {
-			continue
-		}
-		data, ok := p.Data().(map[string]any)
-		if !ok {
-			continue
-		}
+	for _, data := range a2uiMessages(parts) {
 		uc, ok := data["updateComponents"].(map[string]any)
 		if !ok {
 			continue
@@ -252,7 +267,7 @@ func TestExecutorVerbatimBypassesLLM(t *testing.T) {
 		if p == nil {
 			continue
 		}
-		if p.MediaType == a2ui.MIMEType {
+		if isA2UIPart(p) {
 			a2uiParts++
 			continue
 		}
@@ -265,6 +280,42 @@ func TestExecutorVerbatimBypassesLLM(t *testing.T) {
 	}
 	if a2uiParts == 0 {
 		t.Errorf("expected the agent's A2UI to pass through, got parts=%#v", parts)
+	}
+}
+
+// Нажатие кнопки уезжает внешнему агенту штатным событием A2UI, а не
+// пересказом на человеческом языке: пересказ понимает только модель, а событие
+// — любой агент, собранный на референсном SDK.
+func TestExecutorForwardsActionAsA2UIEvent(t *testing.T) {
+	s := startOuroborosStub(t, false)
+	reg := NewRegistry([]config.AgentConfig{ouroborosCfg(s.URL)}, nil)
+	url := serveExecutor(t, NewOrchestratorExecutor(reg, failingBuilder(t), nil), OrchestratorCard)
+
+	probe := newA2UIClient(t, url)
+	probe.c.AgentID = "ouroboros"
+	if _, err := probe.c.SendAction(context.Background(), "return_order",
+		map[string]any{"order_id": "ORD-002", "label": "Оформить возврат"}); err != nil {
+		t.Fatal(err)
+	}
+
+	parts, _ := s.message(t, 0)["parts"].([]any)
+	if len(parts) != 1 {
+		t.Fatalf("ожидалась одна часть, получено %d: %v", len(parts), parts)
+	}
+	part, _ := parts[0].(map[string]any)
+	if txt, _ := part["text"].(string); txt != "" {
+		t.Errorf("действие ушло текстом %q — ожидалось событие", txt)
+	}
+	meta, _ := part["metadata"].(map[string]any)
+	if meta["mimeType"] != a2ui.MIMEType {
+		t.Errorf("metadata.mimeType = %v, ожидалось %q", meta["mimeType"], a2ui.MIMEType)
+	}
+	name, ctx, ok := a2ui.ParseAction(part["data"])
+	if !ok {
+		t.Fatalf("действие не разобралось: %v", part["data"])
+	}
+	if name != "return_order" || ctx["order_id"] != "ORD-002" {
+		t.Errorf("получено name=%q ctx=%v", name, ctx)
 	}
 }
 
@@ -383,14 +434,7 @@ func TestExecutorGivesEachTurnItsOwnSurface(t *testing.T) {
 
 	surfaceIDs := func(parts []*a2a.Part) []string {
 		var ids []string
-		for _, p := range parts {
-			if p == nil || p.MediaType != a2ui.MIMEType {
-				continue
-			}
-			m, ok := p.Data().(map[string]any)
-			if !ok {
-				continue
-			}
+		for _, m := range a2uiMessages(parts) {
 			for _, key := range []string{"createSurface", "updateComponents"} {
 				if payload, ok := m[key].(map[string]any); ok {
 					if id, ok := payload["surfaceId"].(string); ok {

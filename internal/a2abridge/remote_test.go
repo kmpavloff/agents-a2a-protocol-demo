@@ -23,8 +23,13 @@ import (
 type ouroborosStub struct {
 	URL string
 
+	// reply — тело успешного ответа; пустое означает stubCompleted.
+	// Ставится до первого запроса, поэтому под мьютексом не ходит.
+	reply string
+
 	mu       sync.Mutex
 	requests []map[string]any
+	headers  []http.Header
 	workOnce bool // первый SendMessage вернёт WORKING
 }
 
@@ -75,6 +80,7 @@ func startOuroborosStub(t *testing.T, workOnce bool) *ouroborosStub {
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		s.mu.Lock()
 		s.requests = append(s.requests, req)
+		s.headers = append(s.headers, r.Header.Clone())
 		working := s.workOnce && req["method"] == "SendMessage"
 		if working {
 			s.workOnce = false
@@ -85,7 +91,11 @@ func startOuroborosStub(t *testing.T, workOnce bool) *ouroborosStub {
 			_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":"1","result":{"id":"t1","contextId":"c1","status":{"state":"TASK_STATE_WORKING"}}}`)
 			return
 		}
-		_, _ = io.WriteString(w, stubCompleted)
+		body := s.reply
+		if body == "" {
+			body = stubCompleted
+		}
+		_, _ = io.WriteString(w, body)
 	})
 	srv := &http.Server{Handler: mux}
 	go srv.Serve(ln) //nolint:errcheck
@@ -102,6 +112,17 @@ func (s *ouroborosStub) request(t *testing.T, i int) map[string]any {
 		t.Fatalf("request #%d not received (got %d)", i, len(s.requests))
 	}
 	return s.requests[i]
+}
+
+// header возвращает заголовки i-го принятого запроса.
+func (s *ouroborosStub) header(t *testing.T, i int) http.Header {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if i >= len(s.headers) {
+		t.Fatalf("request #%d not received (got %d)", i, len(s.headers))
+	}
+	return s.headers[i]
 }
 
 // message достаёт params.message из i-го запроса.
@@ -337,6 +358,99 @@ func TestRemoteRequestsA2UIWhenCardAdvertisesIt(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("acceptedOutputModes must offer A2UI, got %v", modes)
+	}
+}
+
+// Штатный признак «клиент умеет A2UI» по спеке расширения — не набор режимов
+// вывода, а capabilities в метаданных сообщения плюс заголовок. Заголовок
+// уходит двумя именами: A2A 1.0 знает A2A-Extensions, спека A2UI v0.9 —
+// X-A2A-Extensions, и агент, собранный по ней, второго не увидит.
+func TestRemoteAnnouncesA2UICapabilities(t *testing.T) {
+	s := startOuroborosStub(t, false)
+	r := NewRemote(ouroborosCfg(s.URL), nil)
+	if _, err := r.Ask(context.Background(), "sess-1", "статус заказа"); err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+
+	meta, _ := s.message(t, 0)["metadata"].(map[string]any)
+	caps, ok := meta["a2uiClientCapabilities"].(map[string]any)
+	if !ok {
+		t.Fatalf("нет metadata.a2uiClientCapabilities: %v", meta)
+	}
+	v09, _ := caps["v0.9"].(map[string]any)
+	ids, _ := v09["supportedCatalogIds"].([]any)
+	if len(ids) == 0 || ids[0] != a2ui.CatalogID {
+		t.Errorf("supportedCatalogIds = %v, ожидался basic-каталог", ids)
+	}
+	// skill остаётся на месте: capabilities его не вытесняют.
+	if meta["skill"] != "shop" {
+		t.Errorf("metadata.skill = %v, ожидалось shop", meta["skill"])
+	}
+
+	h := s.header(t, 0)
+	for _, name := range []string{"A2A-Extensions", "X-A2A-Extensions"} {
+		if got := h.Get(name); got != a2ui.ExtensionURI {
+			t.Errorf("заголовок %s = %q, ожидался %q", name, got, a2ui.ExtensionURI)
+		}
+	}
+}
+
+// Разметку спека кладёт в части сообщения — оттуда её и надо читать. Артефакт
+// остаётся запасным путём (см. TestRemoteAskSendsSkillAndParsesA2UI), но когда
+// разметка есть в обоих местах, поверхность не должна приехать дважды.
+func TestRemotePrefersA2UIFromStatusMessage(t *testing.T) {
+	s := startOuroborosStub(t, false)
+	s.reply = `{"jsonrpc":"2.0","id":"1","result":{"id":"t1","contextId":"c1",
+	 "status":{"state":"TASK_STATE_COMPLETED","message":{"messageId":"m1","role":"ROLE_AGENT","parts":[
+	   {"text":"Заказ доставлен","mediaType":"text/plain"},
+	   {"metadata":{"mimeType":"application/a2ui+json"},"data":[
+	     {"version":"v0.9.1","createSurface":{"surfaceId":"from-message"}},
+	     {"version":"v0.9.1","updateComponents":{"surfaceId":"from-message","components":[{"Text":{"id":"t","text":"Order"}}]}}
+	   ]}]}},
+	 "artifacts":[{"artifactId":"a1","parts":[{"mediaType":"application/a2ui+json","data":[
+	   {"version":"v0.9.1","createSurface":{"surfaceId":"from-artifact"}},
+	   {"version":"v0.9.1","updateComponents":{"surfaceId":"from-artifact","components":[{"Text":{"id":"t","text":"Order"}}]}}
+	 ]}]}]}}`
+
+	r := NewRemote(ouroborosCfg(s.URL), nil)
+	reply, err := r.Ask(context.Background(), "sess-1", "статус заказа")
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if reply.Text != "Заказ доставлен" {
+		t.Errorf("текст ответа = %q", reply.Text)
+	}
+	var ids []string
+	for _, m := range reply.A2UI {
+		if cs, ok := m["createSurface"].(map[string]any); ok {
+			id, _ := cs["surfaceId"].(string)
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) != 1 || ids[0] != "from-message" {
+		t.Errorf("поверхности = %v, ожидалась одна из сообщения", ids)
+	}
+}
+
+// Провалившаяся задача — не ответ. Агент кладёт в статусное сообщение причину
+// отказа, и без разделения она попадала бы в ленту как обычная реплика:
+// пользователь видел бы «timed out» как ответ на свой вопрос.
+func TestRemoteFailedTaskIsError(t *testing.T) {
+	for _, state := range []string{"TASK_STATE_FAILED", "TASK_STATE_REJECTED", "TASK_STATE_CANCELED"} {
+		s := startOuroborosStub(t, false)
+		s.reply = `{"jsonrpc":"2.0","id":"1","result":{"id":"t1","contextId":"c1",
+		 "status":{"state":"` + state + `","message":{"messageId":"m1","role":"ROLE_AGENT",
+		   "parts":[{"text":"timed out","mediaType":"text/plain"}]}}}}`
+
+		r := NewRemote(ouroborosCfg(s.URL), nil)
+		reply, err := r.Ask(context.Background(), "sess-1", "статус заказа")
+		if err == nil {
+			t.Errorf("%s: ожидалась ошибка, получен ответ %q", state, reply.Text)
+			continue
+		}
+		if !strings.Contains(err.Error(), "timed out") {
+			t.Errorf("%s: причина отказа потеряна: %v", state, err)
+		}
 	}
 }
 

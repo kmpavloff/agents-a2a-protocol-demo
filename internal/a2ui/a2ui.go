@@ -10,11 +10,88 @@ import (
 )
 
 const (
-	ExtensionURI = "https://a2ui.org/a2a-extension/a2ui/v0.9"
-	MIMEType     = "application/a2ui+json"
-	Version      = "v0.9"
-	CatalogID    = "https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json"
+	// ExtensionURI — ревизия A2UI, на которой мы говорим. У 0.9.1 свой URI;
+	// v1.0 существует, но это релиз-кандидат, и мы его пока не берём.
+	ExtensionURI = "https://a2ui.org/a2a-extension/a2ui/v0.9.1"
+
+	// LegacyExtensionURI — та же поддержка под именем предыдущей ревизии.
+	// Отправляем и принимаем оба: агент, знающий только 0.9, иначе не поймёт,
+	// что клиент умеет рисовать, и ответит одним текстом.
+	LegacyExtensionURI = "https://a2ui.org/a2a-extension/a2ui/v0.9"
+
+	MIMEType = "application/a2ui+json"
+
+	// Version — значение поля version в сообщениях. Схемы 0.9.1 объявляют его
+	// как enum ["v0.9", "v0.9.1"], схемы 0.9 — как const "v0.9". Полезная
+	// нагрузка у ревизий одна и та же: 0.9.1 лишь стандартизировал MIME и
+	// ослабил требование к уникальности surfaceId.
+	Version = "v0.9.1"
+
+	// CapabilitiesKey — ключ внутри a2uiClientCapabilities. Именно "v0.9", а не
+	// Version: схема client_capabilities.json в наборе 0.9.1 объявляет ровно
+	// это свойство и никакого "v0.9.1" не знает.
+	CapabilitiesKey = "v0.9"
+
+	// CatalogID — каталог компонентов. В 0.9.1 он свой не заводился, ссылка
+	// по-прежнему на набор v0_9.
+	CatalogID = "https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json"
+
+	// LegacyMIMEType — тип из ранних сборок A2UI (0.8 и часть 0.9). Мы его
+	// только принимаем: отдаём всегда MIMEType.
+	LegacyMIMEType = "application/json+a2ui"
+
+	// MIMEKey — ключ, под которым тип части лежит в её метаданных. Спека
+	// расширения опознаёт A2UI-часть именно так, а не по полю mediaType.
+	MIMEKey = "mimeType"
 )
+
+// IsA2UI отвечает, несёт ли часть разметку A2UI. Спека помечает её
+// metadata.mimeType; поле mediaType — второй, менее формальный способ, которым
+// пользуемся мы сами и живые агенты. Принимаем оба и оба типа, отдаём всегда
+// metadata.mimeType + MIMEType (см. ClientCapabilities и сборку частей в
+// a2abridge).
+//
+// Сигнатура намеренно транспортно-независима: пакет a2ui не знает про a2a.
+func IsA2UI(mediaType string, metadata map[string]any) bool {
+	if known(mediaType) {
+		return true
+	}
+	m, _ := metadata[MIMEKey].(string)
+	return known(m)
+}
+
+func known(mime string) bool {
+	return mime == MIMEType || mime == LegacyMIMEType
+}
+
+// ClientCapabilities возвращает значение metadata.a2uiClientCapabilities —
+// объявление рендерера о том, какие каталоги он умеет. Вместе с заголовком
+// расширения это штатный признак «клиент умеет A2UI»; acceptedOutputModes
+// таким признаком по спеке не является.
+func ClientCapabilities() map[string]any {
+	return map[string]any{
+		CapabilitiesKey: map[string]any{"supportedCatalogIds": []any{CatalogID}},
+	}
+}
+
+// NewAction собирает событие клиента по схеме client_to_server.
+//
+// Все пять полей действия обязательны (`required` в client_to_server.json), а
+// сам конверт — ровно два свойства: version и action. Поэтому пустые surfaceID
+// и sourceComponentID именно пустеют, а не исчезают: без них payload не пройдёт
+// валидацию у агента, который её делает.
+func NewAction(name, surfaceID, sourceComponentID string, ctx map[string]any, timestamp string) map[string]any {
+	if ctx == nil {
+		ctx = map[string]any{}
+	}
+	return map[string]any{"version": Version, "action": map[string]any{
+		"name":              name,
+		"surfaceId":         surfaceID,
+		"sourceComponentId": sourceComponentID,
+		"timestamp":         timestamp,
+		"context":           ctx,
+	}}
+}
 
 // surfaceCounter makes surface ids unique within a process without needing a
 // random source (unavailable in some sandboxes). It is not concurrency-critical:
@@ -58,11 +135,21 @@ func surface(surfaceID string, components []map[string]any) []map[string]any {
 	}
 }
 
-// ParseAction extracts an incoming A2UI action event from a DataPart's data map.
-// Shape: {"version":"v0.9","action":{"name":"...","context":{...}}}. Returns
-// ok=false when the map is not an action payload.
-func ParseAction(data map[string]any) (string, map[string]any, bool) {
-	if data == nil {
+// ParseAction extracts an incoming A2UI action event from a DataPart payload.
+// Shape: {"version":"v0.9","action":{"name":"...","context":{...}}}. По спеке
+// data — массив таких сообщений, поэтому принимается и он: берётся первое
+// сообщение-действие. Returns ok=false when the payload carries no action.
+func ParseAction(payload any) (string, map[string]any, bool) {
+	if list, ok := payload.([]any); ok {
+		for _, item := range list {
+			if name, ctx, ok := ParseAction(item); ok {
+				return name, ctx, true
+			}
+		}
+		return "", nil, false
+	}
+	data, ok := payload.(map[string]any)
+	if !ok || data == nil {
 		return "", nil, false
 	}
 	action, ok := data["action"].(map[string]any)
@@ -78,6 +165,25 @@ func ParseAction(data map[string]any) (string, map[string]any, bool) {
 		ctx = map[string]any{}
 	}
 	return name, ctx, true
+}
+
+// ActionOrigin возвращает поверхность и компонент, откуда пришло действие.
+// Схема их не требует, поэтому оба значения могут быть пустыми; нужны, чтобы
+// передать событие дальше, не потеряв, какая кнопка какой карточки нажата.
+func ActionOrigin(payload any) (surfaceID, sourceComponentID string) {
+	if list, ok := payload.([]any); ok {
+		for _, item := range list {
+			if s, c := ActionOrigin(item); s != "" || c != "" {
+				return s, c
+			}
+		}
+		return "", ""
+	}
+	data, _ := payload.(map[string]any)
+	action, _ := data["action"].(map[string]any)
+	surfaceID, _ = action["surfaceId"].(string)
+	sourceComponentID, _ = action["sourceComponentId"].(string)
+	return surfaceID, sourceComponentID
 }
 
 // FromWidget converts a widget map (keyed by "_kind" plus payload) into the

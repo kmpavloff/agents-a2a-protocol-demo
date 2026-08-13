@@ -3,6 +3,7 @@ package a2ui
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -11,6 +12,7 @@ import (
 // формате A2UI.
 type Part struct {
 	MediaType string
+	Metadata  map[string]any
 	Text      string
 	Data      any
 }
@@ -45,7 +47,7 @@ func Ingest(parts []Part) []map[string]any {
 	var out []map[string]any
 	st := &ingestState{rooted: map[string]bool{}}
 	for _, p := range parts {
-		if p.MediaType != MIMEType {
+		if !IsA2UI(p.MediaType, p.Metadata) {
 			continue
 		}
 		for _, raw := range messagesFrom(p) {
@@ -95,6 +97,13 @@ func messagesFrom(p Part) []map[string]any {
 
 // normalizeMessage переписывает версию сообщения на нашу и нормализует
 // компоненты. Возвращает ok=false для сообщений неизвестного вида.
+//
+// Про версию: агенты шлют и "v0.9", и "v0.9.1" — оба значения законны, схемы
+// набора v0.9.1 объявляют поле как enum из этих двух. Мы понижаем до "v0.9",
+// потому что рендерер собран на модуле v0_9, где стоит const: отдельного
+// модуля v0_9_1 в @a2ui/web_core нет, там v0_8, v0_9 и v1_0. Понижение
+// безопасно — релиз 0.9.1 полезную нагрузку не менял, только стандартизировал
+// MIME и ослабил требование к уникальности surfaceId.
 func normalizeMessage(msg map[string]any, st *ingestState) (map[string]any, bool) {
 	kind := ""
 	for _, k := range knownMessages {
@@ -453,6 +462,24 @@ func unknownDump(typ string, props map[string]any) string {
 
 // surfaceIDKeys — сообщения, у которых есть surfaceId.
 var surfaceIDKeys = []string{"createSurface", "updateComponents", "updateDataModel", "deleteSurface"}
+
+// turnSuffix — суффикс, который навешивает RetagSurfaces: «-t» и номер хода.
+var turnSuffix = regexp.MustCompile(`-t\d+$`)
+
+// UntagSurface снимает суффикс хода — обратная операция к RetagSurfaces.
+//
+// Нужна на пути наружу: в ленте поверхность зовётся s1-t3, а агент знает её как
+// s1, и вернуть ему собственный идентификатор — единственный способ дать
+// сопоставить событие со своей поверхностью.
+//
+// Суффикс распознаётся по форме, а не запоминается: клик может прийти на любом
+// последующем ходу, и номер, под которым поверхность создавалась, к этому
+// моменту уже не тот. Агентский id, сам оканчивающийся на «-t» с цифрами,
+// будет укорочен ошибочно — но это ровно тот исход, который без снятия суффикса
+// получался бы всегда.
+func UntagSurface(id string) string {
+	return turnSuffix.ReplaceAllString(id, "")
+}
 
 // RetagSurfaces приписывает суффикс ко всем surfaceId в наборе сообщений.
 //
