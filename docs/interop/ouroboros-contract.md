@@ -32,7 +32,7 @@ A2UI, продолжает читать текст.
 |---|---|
 | Адрес | `http://192.168.1.68:18800/` — единственный эндпоинт, JSON-RPC 2.0 поверх `POST` |
 | Карточка | `GET /.well-known/agent-card.json` — канонический путь; старый `/.well-known/agent.json` с 2026-08-12 отдаёт `404` |
-| Аутентификация | HTTP Basic, `ouroboros:testpass` |
+| Аутентификация | HTTP Basic, `ouroboros:test` |
 | Методы | `SendMessage`, `GetTask` |
 | Стриминг | нет — ответ приходит одним куском |
 | Время хода | от 30 с до 3 мин; таймаут клиента стоит ставить от 180 с |
@@ -42,7 +42,7 @@ A2UI, продолжает читать текст.
 | Заголовок | Значение | |
 |---|---|---|
 | `Content-Type` | `application/json` | обязателен |
-| `Authorization` | `Basic b3Vyb2Jvcm9zOnRlc3RwYXNz` | обязателен, иначе `401` |
+| `Authorization` | `Basic b3Vyb2Jvcm9zOnRlc3Q=` | обязателен, иначе `401` |
 | `A2A-Version` | `1.0` | версия протокола, на которой говорит клиент |
 | `A2A-Extensions` | `https://a2ui.org/a2a-extension/a2ui/v0.9.1` и `…/v0.9` | этап 2: клиент умеет рендерить A2UI |
 | `X-A2A-Extensions` | те же значения | этап 2: те же URI под старым именем заголовка |
@@ -86,7 +86,7 @@ JSON-RPC `POST` и **не** идут на `GET` карточки (её тяну�
 ## 4. Карточка агента
 
 ```bash
-curl -s http://192.168.1.68:18800/.well-known/agent-card.json -u ouroboros:testpass
+curl -s http://192.168.1.68:18800/.well-known/agent-card.json -u ouroboros:test
 ```
 
 Карточка отдаётся медленно — от 6 до 60 секунд в зависимости от загрузки
@@ -284,7 +284,7 @@ curl -s http://192.168.1.68:18800/.well-known/agent-card.json -u ouroboros:testp
 ### 5.1 Ход без A2UI (этап 1)
 
 ```bash
-curl -s -X POST http://192.168.1.68:18800/ -u ouroboros:testpass \
+curl -s -X POST http://192.168.1.68:18800/ -u ouroboros:test \
   -H 'Content-Type: application/json' \
   -H 'A2A-Version: 1.0' \
   -d '{"jsonrpc":"2.0","id":"1","method":"SendMessage","params":{
@@ -316,7 +316,7 @@ curl -s -X POST http://192.168.1.68:18800/ -u ouroboros:testpass \
 ### 5.2 Ход с A2UI (этап 2)
 
 ```bash
-curl -s -X POST http://192.168.1.68:18800/ -u ouroboros:testpass \
+curl -s -X POST http://192.168.1.68:18800/ -u ouroboros:test \
   -H 'Content-Type: application/json' \
   -H 'A2A-Version: 1.0' \
   -H 'A2A-Extensions: https://a2ui.org/a2a-extension/a2ui/v0.9.1' \
@@ -526,7 +526,7 @@ MIME-тип: `application/a2ui+json`. Легаси-тип `application/json+a2ui
 `TASK_STATE_SUBMITTED` — тогда по `id` опрашивается результат.
 
 ```bash
-curl -s -X POST http://192.168.1.68:18800/ -u ouroboros:testpass \
+curl -s -X POST http://192.168.1.68:18800/ -u ouroboros:test \
   -H 'Content-Type: application/json' \
   -H 'A2A-Version: 1.0' \
   -d '{"jsonrpc":"2.0","id":"g","method":"GetTask","params":{"id":"b77f97970d2c4a158d2fb99e00679360"}}'

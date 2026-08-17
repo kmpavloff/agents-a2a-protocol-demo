@@ -9,7 +9,7 @@
 референсной реализации, реальный ответ демона и команда для проверки.
 
 Все ответы сняты 2026-08-11, после обновления контракта на стороне агента.
-Базовые параметры: `http://192.168.1.68:18800/`, Basic `ouroboros:testpass`,
+Базовые параметры: `http://192.168.1.68:18800/`, Basic `ouroboros:test`,
 `metadata.skill = "shop"`.
 
 Наши реализации-эталоны: `github.com/a2aproject/a2a-go v2.3.1` (A2A) и
@@ -80,7 +80,7 @@ this._hasRoot = !!this.surface?.componentsModel.get('root');
 Нет `root` → `render()` навсегда отдаёт `<div>Loading surface...</div>`.
 
 ```bash
-curl -s -X POST http://192.168.1.68:18800/ -u ouroboros:testpass \
+curl -s -X POST http://192.168.1.68:18800/ -u ouroboros:test \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":"1","method":"SendMessage","params":{"message":{
        "messageId":"m1","role":"ROLE_USER",
@@ -136,7 +136,7 @@ print("root:", any(x["id"]=="root" for x in c), "| ids:", [x["id"] for x in c][:
 | `artifacts` | есть | есть (совпало) |
 
 ```bash
-curl -s -X POST http://192.168.1.68:18800/ -u ouroboros:testpass \
+curl -s -X POST http://192.168.1.68:18800/ -u ouroboros:test \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":"g","method":"GetTask","params":{"id":"<TASK_ID>"}}' \
 | python3 -c 'import json,sys
@@ -293,6 +293,6 @@ action context». Ожидается `{"order_id": "ORD-001"}`. На масси�
 LIVE_AGENT_URL=http://192.168.1.68:18800 \
 LIVE_AGENT_CARD_PATH=/.well-known/agent.json \
 LIVE_AGENT_SKILL=shop \
-LIVE_AGENT_USER=ouroboros LIVE_AGENT_PASSWORD=testpass \
+LIVE_AGENT_USER=ouroboros LIVE_AGENT_PASSWORD=test \
 go test ./internal/a2abridge/ -run TestLiveRemoteAgent -v -timeout 300s
 ```

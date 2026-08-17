@@ -46,8 +46,8 @@ agents:
   #   auth:
   #     type: basic
   #     username: ouroboros
-  #     # Пароль можно не хранить в файле: A2A_AGENT_OUROBOROS_PASSWORD=...
-  #     password: testpass
+  #     # Пароль можно не хранить в файле: A2A_AGENT_OUROBOROS_PASSWORD=…
+  #     password: test
 
 # `worker_url` — исторический одиночный агент. Он работает ТОЛЬКО когда список
 # `agents` пуст (тогда из него синтезируется запись `orders`), поэтому здесь его

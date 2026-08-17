@@ -297,7 +297,7 @@ agents:
     verbatim: true                         # answer bypasses the local LLM
     timeout: "180s"
     description: "Заказы интернет-магазина: статус, детали, возвраты."
-    auth: {type: basic, username: ouroboros, password: testpass}
+    auth: {type: basic, username: ouroboros, password: test}
 ```
 
 Three modes, chosen by what the user picks in the selector:
@@ -342,7 +342,7 @@ To check the chain against a real agent:
 LIVE_AGENT_URL=http://192.168.1.68:18800 \
 LIVE_AGENT_CARD_PATH=/.well-known/agent.json \
 LIVE_AGENT_SKILL=shop \
-LIVE_AGENT_USER=ouroboros LIVE_AGENT_PASSWORD=testpass \
+LIVE_AGENT_USER=ouroboros LIVE_AGENT_PASSWORD=test \
 go test ./internal/a2abridge/ -run TestLiveRemoteAgent -v -timeout 300s
 ```
 
