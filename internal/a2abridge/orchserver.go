@@ -2,6 +2,7 @@ package a2abridge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"iter"
 	"sort"
@@ -261,6 +262,12 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 				}
 			}
 		}
+		// Режим едет дальше по цепочке: не запросив расширение, клиент выбрал
+		// текст, и просить разметку у внешнего агента незачем — он потратит на
+		// неё время, а мы всё равно выбросим.
+		if !a2uiActive {
+			ctx = withoutA2UI(ctx)
+		}
 		e.trace.Logf("▶ orchestrator A2A request | contextID=%s a2ui=%v inParts=%d stored=%v",
 			sessionID, a2uiActive, nParts, ec.StoredTask != nil)
 
@@ -345,7 +352,7 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 			}
 			if err != nil {
 				e.trace.Logf("  ✖ verbatim turn failed: %v", err)
-				emit(fmt.Sprintf("Агент %q недоступен: %v", remote.Name(), err), nil, nil, nil, "verbatim error")
+				emit(agentErrorText(remote.Name(), err), nil, nil, nil, "verbatim error")
 				return
 			}
 			emit(reply.Text, reply.Widgets, reply.A2UI, reply.Files, "verbatim")
@@ -555,6 +562,21 @@ func fileParts(fs []attachedFile) []*a2a.Part {
 	return parts
 }
 
+// agentErrorText превращает сбой хода в строку для ленты. Провалившийся ход и
+// недоступный агент — разные беды, и валить их в одну формулировку нельзя:
+// «недоступен» отправит пользователя чинить сеть там, где агент на связи и
+// просто не справился с запросом.
+func agentErrorText(name string, err error) string {
+	var failed *TurnFailedError
+	if errors.As(err, &failed) {
+		if why := failed.FirstLine(); why != "" {
+			return fmt.Sprintf("Агент %q не смог выполнить запрос: %s", name, why)
+		}
+		return fmt.Sprintf("Агент %q не смог выполнить запрос.", name)
+	}
+	return fmt.Sprintf("Агент %q недоступен: %v", name, err)
+}
+
 // withExt returns a context carrying a service-param request to activate the
 // A2UI A2A extension, the mechanism a2a-go v2.3.1 clients use to convey
 // requested extensions (there is no field on SendMessageRequest for this).
@@ -593,6 +615,10 @@ type A2UIProbe struct {
 	// AgentID, if set, rides along in the message metadata — the same way the
 	// browser tells the orchestrator which agent the user picked.
 	AgentID string
+	// A2UI — режим разговора, как переключатель в браузере. false означает
+	// «только текст»: расширение не объявляется ни заголовком, ни
+	// capabilities, и оркестратор не просит разметку у внешнего агента.
+	A2UI bool
 }
 
 func NewA2UIProbe(ctx context.Context, url string) (*A2UIProbe, error) {
@@ -604,7 +630,7 @@ func NewA2UIProbe(ctx context.Context, url string) (*A2UIProbe, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &A2UIProbe{client: cl}, nil
+	return &A2UIProbe{client: cl, A2UI: true}, nil
 }
 
 // send delivers part to the agent, carrying over the previously seen
@@ -617,10 +643,18 @@ func (p *A2UIProbe) send(ctx context.Context, part *a2a.Part) ([]*a2a.Part, erro
 	if p.contextID != "" {
 		msg.ContextID = p.contextID
 	}
+	meta := map[string]any{}
 	if p.AgentID != "" {
-		msg.Metadata = map[string]any{"agentId": p.AgentID}
+		meta["agentId"] = p.AgentID
 	}
-	res, err := p.client.SendMessage(withExt(ctx), &a2a.SendMessageRequest{Message: msg})
+	if p.A2UI {
+		meta["a2uiClientCapabilities"] = a2ui.ClientCapabilities()
+		ctx = withExt(ctx)
+	}
+	if len(meta) > 0 {
+		msg.Metadata = meta
+	}
+	res, err := p.client.SendMessage(ctx, &a2a.SendMessageRequest{Message: msg})
 	if err != nil {
 		return nil, err
 	}

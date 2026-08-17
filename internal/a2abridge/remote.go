@@ -25,6 +25,51 @@ import (
 // внешнего агента предписывает 1–2 секунды.
 const pollInterval = 2 * time.Second
 
+// a2uiSuppressedKey помечает контекст хода, на котором клиент не просил
+// generative UI. Значение контекста, а не поле Remote: Remote общий для всех
+// сессий, а режим выбирается на разговор.
+type a2uiSuppressedKey struct{}
+
+// withoutA2UI помечает ход как текстовый: у внешнего агента разметку не просим.
+func withoutA2UI(ctx context.Context) context.Context {
+	return context.WithValue(ctx, a2uiSuppressedKey{}, true)
+}
+
+// a2uiSuppressed отвечает, выбран ли на этом ходу текстовый режим.
+func a2uiSuppressed(ctx context.Context) bool {
+	v, _ := ctx.Value(a2uiSuppressedKey{}).(bool)
+	return v
+}
+
+// TurnFailedError — агент ответил, но ход не удался: задача пришла в
+// FAILED/REJECTED/CANCELED, а причина лежит в её статусном сообщении.
+//
+// Отдельный тип нужен, чтобы интерфейс не путал это с недоступностью: агент на
+// связи и отвечает, просто не смог выполнить именно этот запрос. Формулировка
+// «агент недоступен» на таком сбое — неправда, а пользователь по ней пойдёт
+// проверять сеть вместо того, чтобы повторить ход.
+type TurnFailedError struct {
+	AgentID string
+	State   a2a.TaskState
+	Reason  string
+}
+
+func (e *TurnFailedError) Error() string {
+	return fmt.Sprintf("agent %q turn failed (%s): %s", e.AgentID, e.State, e.Reason)
+}
+
+// FirstLine возвращает первую содержательную строку причины. Агенты кладут в
+// неё многострочный текст — сообщение об ошибке плюс ссылку на документацию, — а
+// в ленте нужна одна строка.
+func (e *TurnFailedError) FirstLine() string {
+	for _, line := range strings.Split(e.Reason, "\n") {
+		if s := strings.TrimSpace(line); s != "" {
+			return s
+		}
+	}
+	return e.Reason
+}
+
 // Reply — то, что удалённый агент вернул за один ход.
 type Reply struct {
 	Text string
@@ -431,6 +476,14 @@ func defaultToolName(id string) string {
 
 // acceptsA2UI сообщает, объявляет ли агент способность отдавать A2UI: только
 // таким агентам есть смысл слать запрос на generative UI.
+// wantsA2UI — просим ли разметку на этом ходу. Двух условий: агент умеет её
+// отдавать (объявил в карточке) и клиент её на этом разговоре хочет. Второе
+// приезжает значением контекста: режим выбирается в браузере на разговор, а
+// Remote общий для всех сессий.
+func (r *Remote) wantsA2UI(ctx context.Context) bool {
+	return r.acceptsA2UI() && !a2uiSuppressed(ctx)
+}
+
 func (r *Remote) acceptsA2UI() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -499,7 +552,8 @@ func (r *Remote) ask(ctx context.Context, sessionID string, outgoing *a2a.Part, 
 	// Сказать агенту, что клиент умеет рендерить generative UI: заголовок
 	// расширения (обоими именами, см. withExt) и a2uiClientCapabilities ниже.
 	// Именно эту пару спека расширения называет способом договориться.
-	if r.acceptsA2UI() {
+	wantsA2UI := r.wantsA2UI(ctx)
+	if wantsA2UI {
 		ctx = withExt(ctx)
 	}
 
@@ -524,7 +578,7 @@ func (r *Remote) ask(ctx context.Context, sessionID string, outgoing *a2a.Part, 
 	}
 	// Какие каталоги умеет наш рендерер. Штатный признак «клиент говорит на
 	// A2UI»: acceptedOutputModes спека таким признаком не считает.
-	if r.acceptsA2UI() {
+	if wantsA2UI {
 		meta["a2uiClientCapabilities"] = a2ui.ClientCapabilities()
 	}
 	if len(meta) > 0 {
@@ -543,7 +597,7 @@ func (r *Remote) ask(ctx context.Context, sessionID string, outgoing *a2a.Part, 
 	r.trace.Logf("    SendMessage role=user skill=%q contextId=%s text=%q", r.cfg.Skill, sentCtx, echo)
 
 	req := &a2a.SendMessageRequest{Message: msg}
-	if r.acceptsA2UI() {
+	if wantsA2UI {
 		// Поле родное для A2A и агенту не мешает; триггером A2UI оно, по спеке
 		// расширения, не является — им служат заголовок и capabilities выше.
 		req.Config = &a2a.SendMessageConfig{
@@ -578,7 +632,7 @@ func (r *Remote) ask(ctx context.Context, sessionID string, outgoing *a2a.Part, 
 		if err != nil {
 			return Reply{}, err
 		}
-		return r.replyFromTask(sessionID, task)
+		return r.replyFromTask(ctx, sessionID, task)
 
 	default:
 		r.trace.Logf("    ✖ unexpected A2A result type %T", res)
@@ -617,7 +671,7 @@ func (r *Remote) awaitTerminal(ctx context.Context, client *a2aclient.Client, ta
 // кладёт в статусное сообщение причину отказа («timed out» и подобное), и без
 // разделения она попадала бы в ленту как обычная реплика — пользователь видел
 // бы сбой агента в виде ответа на свой вопрос.
-func (r *Remote) replyFromTask(sessionID string, task *a2a.Task) (Reply, error) {
+func (r *Remote) replyFromTask(ctx context.Context, sessionID string, task *a2a.Task) (Reply, error) {
 	r.trace.Logf("◀── response: Task | id=%s contextID=%s state=%s", task.ID, task.ContextID, task.Status.State)
 
 	r.mu.Lock()
@@ -642,7 +696,7 @@ func (r *Remote) replyFromTask(sessionID string, task *a2a.Task) (Reply, error) 
 	case a2a.TaskStateFailed, a2a.TaskStateRejected, a2a.TaskStateCanceled:
 		why := strings.TrimSpace(statusMessageText(task))
 		r.trace.Logf("    ✖ задача завершилась неуспехом: state=%s reason=%q", task.Status.State, why)
-		return Reply{}, fmt.Errorf("agent %q turn failed (%s): %s", r.cfg.ID, task.Status.State, why)
+		return Reply{}, &TurnFailedError{AgentID: r.cfg.ID, State: task.Status.State, Reason: why}
 	}
 
 	// Текст берём из статусного сообщения, если агент положил его туда
@@ -658,7 +712,13 @@ func (r *Remote) replyFromTask(sessionID string, task *a2a.Task) (Reply, error) 
 	reply := r.replyFromParts(statusParts(task), artifactParts(task), fallback)
 	r.trace.Logf("    ✔ terminal state | text=%q a2ui=%d widgets=%d files=%d",
 		reply.Text, len(reply.A2UI), len(reply.Widgets), len(reply.Files))
-	if len(reply.A2UI) == 0 && len(reply.Widgets) == 0 && r.acceptsA2UI() {
+	switch {
+	case len(reply.A2UI) > 0 || len(reply.Widgets) > 0:
+	case a2uiSuppressed(ctx):
+		// Не «агент не прислал», а «мы не просили»: на этом разговоре выбран
+		// текстовый режим. Без пометки строка ниже вводила бы в заблуждение.
+		r.trace.Logf("    ⓘ текстовый режим — разметку у агента не запрашивали")
+	case r.acceptsA2UI():
 		// Частый вопрос «почему нет виджета»: агент объявляет A2UI в карточке,
 		// мы его запросили, но на этом ходу он решил ответить только текстом.
 		r.trace.Logf("    ⓘ агент объявляет A2UI и получил запрос на него, но в этом ответе прислал только текст — виджета не будет")

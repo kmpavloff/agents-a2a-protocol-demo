@@ -319,6 +319,75 @@ func TestExecutorForwardsActionAsA2UIEvent(t *testing.T) {
 	}
 }
 
+// Провалившийся ход и недоступный агент — разные беды, и в ленте они обязаны
+// читаться по-разному: «недоступен» отправит пользователя чинить сеть там, где
+// агент на связи и просто не справился с запросом.
+func TestAgentErrorTextDistinguishesFailureFromOutage(t *testing.T) {
+	failed := &TurnFailedError{
+		AgentID: "ouroboros",
+		State:   a2a.TaskStateFailed,
+		Reason:  "Client error '403 Forbidden' for url 'http://127.0.0.1:8767/chat/allocate-internal'\nFor more information check: https://developer.mozilla.org/…",
+	}
+	got := agentErrorText("Ouroboros · магазин", failed)
+	if strings.Contains(got, "недоступен") {
+		t.Errorf("провал хода назван недоступностью: %q", got)
+	}
+	if !strings.Contains(got, "403 Forbidden") {
+		t.Errorf("причина отказа потеряна: %q", got)
+	}
+	// Вторая строка причины — ссылка на документацию, в ленте она лишняя.
+	if strings.Contains(got, "developer.mozilla.org") || strings.Contains(got, "\n") {
+		t.Errorf("в ленту утекла многострочная простыня: %q", got)
+	}
+
+	down := fmt.Errorf("agent %q unreachable: %w", "ouroboros", context.DeadlineExceeded)
+	if got := agentErrorText("Ouroboros · магазин", down); !strings.Contains(got, "недоступен") {
+		t.Errorf("недоступность должна называться недоступностью: %q", got)
+	}
+}
+
+// Текстовый режим сквозной: клиент не объявил A2UI — значит и у внешнего
+// агента разметку просить незачем, он потратит на неё время впустую.
+//
+// Заодно это проверка того, что намерение клиента доезжает до Remote по пути
+// «Авто»: там между исполнителем и агентом стоит runner ADK с вызовом
+// инструмента, и значение контекста обязано пережить эту прослойку.
+func TestTextModeStopsAskingAgentForA2UI(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		a2ui     bool
+		wantCaps bool
+	}{
+		{"режим виджетов", true, true},
+		{"текстовый режим", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := startOuroborosStub(t, false)
+			orchModel := llm.NewStub(
+				llm.StubTurn{Call: &genai.FunctionCall{Name: "ask_ouroboros", Args: map[string]any{"message": "статус заказа"}}},
+				llm.StubTurn{Text: "готово"},
+			)
+			url, _ := startOrchestratorWith(t, orchModel, []config.AgentConfig{ouroborosCfg(s.URL)})
+
+			probe := newA2UIClient(t, url)
+			probe.c.A2UI = tc.a2ui
+			if _, err := probe.c.SendText(context.Background(), "статус заказа"); err != nil {
+				t.Fatal(err)
+			}
+
+			meta, _ := s.message(t, 0)["metadata"].(map[string]any)
+			_, gotCaps := meta["a2uiClientCapabilities"]
+			if gotCaps != tc.wantCaps {
+				t.Errorf("a2uiClientCapabilities у агента: %v, ожидалось %v", gotCaps, tc.wantCaps)
+			}
+			gotHeader := s.header(t, 0).Get("A2A-Extensions") != ""
+			if gotHeader != tc.wantCaps {
+				t.Errorf("заголовок расширения у агента: %v, ожидалось %v", gotHeader, tc.wantCaps)
+			}
+		})
+	}
+}
+
 // Браузер с устаревшим списком агентов не должен ломать диалог.
 func TestExecutorUnknownAgentFallsBackToAuto(t *testing.T) {
 	workerURL := startWorker(t, llm.NewStub(llm.StubTurn{Text: "неважно"}))

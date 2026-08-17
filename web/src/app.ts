@@ -109,6 +109,13 @@ export class OrdersApp extends LitElement {
   // agent. Each created surface becomes a widget item in the feed, in order.
   #processor = this.#makeProcessor();
 
+  constructor() {
+    super();
+    // Модель данных берётся у процессора на каждом ходу: он пересоздаётся
+    // кнопкой «Новый разговор», поэтому читаем поле, а не захватываем ссылку.
+    this.#client.setDataModelProvider(() => this.#processor.getClientDataModel());
+  }
+
   #makeProcessor() {
     return new MessageProcessor([basicCatalog], async (action: any) => {
       // Ход уже идёт — просто игнорируем клик. Иначе карточка исчезала бы из
@@ -154,6 +161,10 @@ export class OrdersApp extends LitElement {
   @state() private _items: Item[] = [];
   @state() private _busy = false;
   @state() private _traffic: TrafficEntry[] = [];
+  // Режим разговора: виджеты или только текст. Не переживает перезагрузку —
+  // это переключатель демонстрации, а не пользовательская настройка.
+  @state() private _a2ui = true;
+
   @state() private _agents: AgentInfo[] = [];
   // Причина, по которой список агентов не удалось загрузить. Панель выбора
   // никогда не исчезает молча: либо список, либо видимая ошибка.
@@ -216,6 +227,16 @@ export class OrdersApp extends LitElement {
         this.#agentsRetry = setTimeout(() => void this.#loadAgents(), 5_000);
       }
     }
+  }
+
+  /**
+   * Переключает режим разговора. Действует со следующего хода: карточки, уже
+   * лежащие в ленте, остаются кликабельными — нажатие на них по-прежнему
+   * валидное событие, и агент ответит на него текстом.
+   */
+  #selectMode(a2ui: boolean) {
+    this._a2ui = a2ui;
+    this.#client.setA2UI(a2ui);
   }
 
   #selectAgent(id: string) {
@@ -583,6 +604,15 @@ export class OrdersApp extends LitElement {
                   ${a.name}${a.probed && !a.available ? ' — не отвечает' : ''}
                 </option>`,
               )}
+            </select>
+            <label for="mode">Режим:</label>
+            <select
+              id="mode"
+              @change=${(e: Event) =>
+                this.#selectMode((e.target as HTMLSelectElement).value === 'a2ui')}
+            >
+              <option value="a2ui" ?selected=${this._a2ui}>Виджеты (A2UI)</option>
+              <option value="text" ?selected=${!this._a2ui}>Только текст</option>
             </select>
             ${selected?.verbatim
               ? html`<span class="agent-note">отвечает напрямую, без локальной модели</span>`

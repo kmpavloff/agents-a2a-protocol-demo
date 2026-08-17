@@ -117,6 +117,10 @@ export class A2UIClient {
   // Which agent the user picked in the selector. 'auto' lets the orchestrator's
   // LLM route the request itself, so it is never sent over the wire.
   #agentId = 'auto';
+  // Режим разговора: false — «только текст», расширение не объявляем вовсе.
+  #a2ui = true;
+  // Поставщик модели данных поверхностей — см. setDataModelProvider.
+  #dataModel: (() => unknown) | null = null;
 
   constructor(baseUrl = '') {
     this.#baseUrl = baseUrl;
@@ -125,6 +129,29 @@ export class A2UIClient {
 
   setAgent(id: string) {
     this.#agentId = id || 'auto';
+  }
+
+  /**
+   * Режим разговора. В текстовом не объявляем расширение ни одним из способов:
+   * ни заголовком, ни a2uiClientCapabilities. Оркестратор по этому молчанию
+   * понимает, что рисовать некому, и не просит разметку у внешнего агента —
+   * тот отвечает текстом сразу, а не делает виджет в стол.
+   */
+  setA2UI(on: boolean) {
+    this.#a2ui = on;
+  }
+
+  /**
+   * Подключает источник a2uiClientDataModel — второй канал, которым введённое
+   * пользователем возвращается агенту.
+   *
+   * Первый канал — привязка в контексте кнопки: рендерер разрешает {path} в
+   * момент клика. Но если агент включил на поверхности sendDataModel, значения
+   * он ждёт здесь, и спека требует слать модель с КАЖДЫМ сообщением, а не
+   * только с нажатием: без этого поле формы для агента навсегда пустое.
+   */
+  setDataModelProvider(provider: () => unknown) {
+    this.#dataModel = provider;
   }
 
   /**
@@ -154,10 +181,21 @@ export class A2UIClient {
         // The chosen agent rides in the message metadata — the same mechanism
         // A2A agents use for extension-specific hints.
         ...(this.#agentId !== 'auto' ? {agentId: this.#agentId} : {}),
-        // Какие каталоги умеет наш рендерер. Вместе с заголовком расширения
-        // это штатный признак «клиент говорит на A2UI»; acceptedOutputModes
-        // спека таким признаком не считает.
-        a2uiClientCapabilities: {[A2UI_CAPS_KEY]: {supportedCatalogIds: [A2UI_CATALOG]}},
+        // Всё, что относится к A2UI, объявляется только в режиме виджетов.
+        // Каталоги рендерера вместе с заголовком расширения — штатный признак
+        // «клиент говорит на A2UI»; acceptedOutputModes спека таким признаком
+        // не считает.
+        ...(this.#a2ui
+          ? {
+              a2uiClientCapabilities: {[A2UI_CAPS_KEY]: {supportedCatalogIds: [A2UI_CATALOG]}},
+              // Модель данных поверхностей, если хоть одна её запросила.
+              // Пустую не шлём: у большинства ходов синхронизировать нечего.
+              ...(() => {
+                const model = this.#dataModel?.();
+                return model ? {a2uiClientDataModel: model} : {};
+              })(),
+            }
+          : {}),
       },
     } as unknown as Message;
 
@@ -175,12 +213,14 @@ export class A2UIClient {
       // ревизию: её понимают оба наших оркестратора, а Go-порт принимает и
       // новую. Сами сообщения при этом идут в 0.9.1 — на согласование
       // расширения это не влияет.
-      {
-        serviceParameters: {
-          'A2A-Extensions': A2UI_EXT_LEGACY,
-          'X-A2A-Extensions': A2UI_EXT_LEGACY,
-        } as any,
-      },
+      this.#a2ui
+        ? {
+            serviceParameters: {
+              'A2A-Extensions': A2UI_EXT_LEGACY,
+              'X-A2A-Extensions': A2UI_EXT_LEGACY,
+            } as any,
+          }
+        : {},
     );
 
     // The orchestrator always returns a Task (submitted → working →
