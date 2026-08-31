@@ -2,6 +2,7 @@ package a2abridge
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
@@ -270,6 +271,7 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 		}
 		e.trace.Logf("▶ orchestrator A2A request | contextID=%s a2ui=%v inParts=%d stored=%v",
 			sessionID, a2uiActive, nParts, ec.StoredTask != nil)
+		e.dump("сообщение от клиента", ec.Message)
 
 		if ec.StoredTask == nil {
 			if !yield(a2a.NewSubmittedTask(ec, ec.Message), nil) {
@@ -325,6 +327,7 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 			e.trace.Logf("  → emit: completed message | %s | parts=%d requestTook=%s",
 				what, len(parts), time.Since(reqStart).Round(time.Millisecond))
 			reply := a2a.NewMessageForTask(a2a.MessageRoleAgent, ec, parts...)
+			e.dump("ответ клиенту", reply)
 			yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateCompleted, reply), nil)
 		}
 
@@ -560,6 +563,21 @@ func fileParts(fs []attachedFile) []*a2a.Part {
 		parts = append(parts, p)
 	}
 	return parts
+}
+
+// dump печатает сообщение целиком, когда включён A2A_DEBUG. Сериализуется тем
+// же кодом, что и на проводе: смысл дампа в том, чтобы видеть отправленное, а
+// не его пересказ структурами Go.
+func (e *orchExecutor) dump(label string, msg *a2a.Message) {
+	if !e.trace.Debug() || msg == nil {
+		return
+	}
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		e.trace.Logf("  ⚠ не удалось сериализовать %s для дампа: %v", label, err)
+		return
+	}
+	e.trace.Dump(label, raw)
 }
 
 // agentErrorText превращает сбой хода в строку для ленты. Провалившийся ход и

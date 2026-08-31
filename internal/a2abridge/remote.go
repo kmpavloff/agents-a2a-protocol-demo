@@ -113,14 +113,31 @@ func (t *envelopeTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	if err != nil {
 		return nil, err
 	}
+	// Дамп тел — здесь, а не уровнем выше: транспорт видит ровно те байты, что
+	// уходят и приходят, уже после всех преобразований SDK.
+	if t.trace.Debug() {
+		if sent, dumpErr := dumpBody(req); dumpErr == nil {
+			t.trace.Dump("запрос агенту "+req.URL.String(), sent)
+		}
+	}
 	resp, err := t.base.RoundTrip(req)
-	if err != nil || !isSend || resp.StatusCode != http.StatusOK {
+	if err != nil || resp.StatusCode != http.StatusOK {
 		return resp, err
+	}
+	if !isSend && !t.trace.Debug() {
+		return resp, nil
 	}
 	body, err := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if err != nil {
 		return nil, err
+	}
+	t.trace.Dump("ответ агента", body)
+	if !isSend {
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		resp.ContentLength = int64(len(body))
+		resp.Header.Del("Content-Length")
+		return resp, nil
 	}
 	fixed, changed := wrapBareResult(body)
 	if changed {
@@ -130,6 +147,21 @@ func (t *envelopeTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	resp.ContentLength = int64(len(fixed))
 	resp.Header.Del("Content-Length")
 	return resp, nil
+}
+
+// dumpBody читает тело запроса для дампа и возвращает его на место.
+func dumpBody(req *http.Request) ([]byte, error) {
+	if req.Body == nil {
+		return nil, nil
+	}
+	body, err := io.ReadAll(req.Body)
+	req.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	req.ContentLength = int64(len(body))
+	return body, nil
 }
 
 // peekSendMessage отвечает, является ли запрос вызовом SendMessage, и
@@ -594,7 +626,9 @@ func (r *Remote) ask(ctx context.Context, sessionID string, outgoing *a2a.Part, 
 	if sentCtx == "" {
 		sentCtx = "(новый разговор)"
 	}
-	r.trace.Logf("    SendMessage role=user skill=%q contextId=%s text=%q", r.cfg.Skill, sentCtx, echo)
+	// Текст маскируется: ответом на форму возврата служит сам номер карты, и
+	// без этого он ложился бы в лог при каждом возврате.
+	r.trace.Logf("    SendMessage role=user skill=%q contextId=%s text=%q", r.cfg.Skill, sentCtx, MaskCardLike(echo))
 
 	req := &a2a.SendMessageRequest{Message: msg}
 	if wantsA2UI {
