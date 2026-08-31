@@ -534,3 +534,64 @@ func TestExecutorGivesEachTurnItsOwnSurface(t *testing.T) {
 		}
 	}
 }
+
+// После правки конфига кэш runner'ов обязан обнулиться: иначе модель осталась
+// бы со старым промптом, а после удаления агента звала бы несуществующий
+// инструмент.
+func TestRunnerCacheDropsOnRegistryChange(t *testing.T) {
+	s := startOuroborosStub(t, false)
+	cfg := ouroborosCfg(s.URL)
+	cfg.ID = "one"
+	reg := NewRegistry([]config.AgentConfig{cfg}, nil)
+
+	built := 0
+	build := func(tools []tool.Tool, summary string) (*runner.Runner, error) {
+		built++
+		return &runner.Runner{}, nil
+	}
+	e := NewOrchestratorExecutor(reg, build, nil).(*orchExecutor)
+
+	ctx := context.Background()
+	if _, err := e.runnerFor(ctx, "one"); err != nil {
+		t.Fatalf("runnerFor: %v", err)
+	}
+	if _, err := e.runnerFor(ctx, "one"); err != nil {
+		t.Fatalf("runnerFor: %v", err)
+	}
+	if built != 1 {
+		t.Fatalf("runner собран %d раз(а) — кэш не работает", built)
+	}
+
+	changed := cfg
+	changed.Description = "Другое описание."
+	reg.Apply([]config.AgentConfig{changed})
+
+	if _, err := e.runnerFor(ctx, "one"); err != nil {
+		t.Fatalf("runnerFor после правки: %v", err)
+	}
+	if built != 2 {
+		t.Errorf("после правки runner собран %d раз(а), want 2", built)
+	}
+}
+
+// Клиент агента, добавленного на ходу, должен получить обработчики виджетов.
+func TestExecutorWiresHandlersForNewAgents(t *testing.T) {
+	s := startOuroborosStub(t, false)
+	cfg := ouroborosCfg(s.URL)
+	cfg.ID = "one"
+	reg := NewRegistry([]config.AgentConfig{cfg}, nil)
+	build := func([]tool.Tool, string) (*runner.Runner, error) { return &runner.Runner{}, nil }
+	e := NewOrchestratorExecutor(reg, build, nil).(*orchExecutor)
+
+	added := ouroborosCfg(s.URL)
+	added.ID = "two"
+	reg.Apply([]config.AgentConfig{cfg, added})
+	c, ok := reg.ClientFor("two")
+	if !ok {
+		t.Fatal("клиент нового агента не создан")
+	}
+	c.onWidget("сессия", map[string]any{"_kind": "widget/order"})
+	if ws, _, _ := e.drain("сессия"); len(ws) != 1 {
+		t.Errorf("виджет нового агента потерян: %+v", ws)
+	}
+}

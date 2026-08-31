@@ -171,6 +171,65 @@ func TestLoadOrchestratorRejectsBadAgents(t *testing.T) {
 
 // Адрес агента подменяется окружением: в контейнере воркер живёт по другому
 // имени, а конфиг тот же. Без этого docker-compose тихо ходил бы на localhost.
+func TestValidateAgentRejectsBadRecords(t *testing.T) {
+	cases := map[string]AgentConfig{
+		"пустой id":       {ID: "", URL: "http://x"},
+		"id с заглавными": {ID: "Orders", URL: "http://x"},
+		"без url":         {ID: "orders"},
+		"кривой timeout":  {ID: "orders", URL: "http://x", Timeout: "полчаса"},
+		"чужой auth":      {ID: "orders", URL: "http://x", Auth: AuthConfig{Type: "oauth"}},
+	}
+	for name, a := range cases {
+		if err := ValidateAgent(a); err == nil {
+			t.Errorf("%s: ожидалась ошибка", name)
+		}
+	}
+	ok := AgentConfig{ID: "orders", URL: "http://x", Timeout: "30s", Auth: AuthConfig{Type: "basic"}}
+	if err := ValidateAgent(ok); err != nil {
+		t.Errorf("корректная запись отвергнута: %v", err)
+	}
+}
+
+// NormalizeAgents — то же, что делает загрузка конфига: умолчания, env, отказ
+// на дубликатах. Нужна отдельно, чтобы применить её к слитому списку.
+func TestNormalizeAgentsAppliesDefaultsAndEnv(t *testing.T) {
+	t.Setenv("A2A_AGENT_ORDERS_URL", "http://from-env:8081")
+	agents := []AgentConfig{{ID: "orders", URL: "http://localhost:8081"}}
+	if err := NormalizeAgents(agents); err != nil {
+		t.Fatalf("NormalizeAgents: %v", err)
+	}
+	if agents[0].URL != "http://from-env:8081" {
+		t.Errorf("env-перекрытие не применено: %q", agents[0].URL)
+	}
+	if agents[0].CardPath != "/.well-known/agent-card.json" {
+		t.Errorf("card_path по умолчанию не подставлен: %q", agents[0].CardPath)
+	}
+}
+
+func TestNormalizeAgentsRejectsDuplicates(t *testing.T) {
+	agents := []AgentConfig{{ID: "orders", URL: "http://a"}, {ID: "orders", URL: "http://b"}}
+	if err := NormalizeAgents(agents); err == nil {
+		t.Fatal("дубликат id должен быть ошибкой")
+	}
+}
+
+func TestAgentEnvVarName(t *testing.T) {
+	if got := AgentEnvVar("my-agent", "URL"); got != "A2A_AGENT_MY_AGENT_URL" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestLoadOrchestratorDefaultsOverlayPath(t *testing.T) {
+	p := writeTemp(t, "worker_url: \"http://localhost:8081\"\nllm:\n  base_url: \"http://localhost:1234/v1\"\n")
+	cfg, err := LoadOrchestrator(p)
+	if err != nil {
+		t.Fatalf("LoadOrchestrator: %v", err)
+	}
+	if cfg.AgentsOverlayPath != "configs/agents.local.yaml" {
+		t.Errorf("agents_overlay_path: got %q", cfg.AgentsOverlayPath)
+	}
+}
+
 func TestLoadOrchestratorAgentURLFromEnv(t *testing.T) {
 	p := writeTemp(t, `
 agents:

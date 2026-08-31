@@ -8,6 +8,9 @@
 configs/worker.yaml
 configs/orchestrator.yaml
 
+# Правки списка агентов из UI: содержат адреса и пароли конкретного стенда.
+configs/agents.local.yaml
+
 # Built web UI — a generated artifact. Regenerate with: cd web && yarn build.
 # Only the .gitkeep is tracked so //go:embed all:dist still compiles.
 /internal/webui/dist/*

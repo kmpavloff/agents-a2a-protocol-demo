@@ -15,6 +15,7 @@ import {basicCatalog, Context} from '@a2ui/lit/v0_9';
 import '@a2ui/lit/v0_9'; // registers <a2ui-surface>
 import {renderMarkdown} from '@a2ui/markdown-it';
 import {A2UIClient, onA2ATraffic, type FileAttachment, type TrafficEntry} from './client.js';
+import './agent-settings.js';
 
 // highlightJson pretty-prints a value and wraps JSON tokens in <span> classes
 // for syntax colouring. The raw JSON is HTML-escaped FIRST, so the only markup
@@ -165,6 +166,12 @@ export class OrdersApp extends LitElement {
   // это переключатель демонстрации, а не пользовательская настройка.
   @state() private _a2ui = true;
 
+  // Вкладка: чат или настройки агентов. Хэш нужен, чтобы перезагрузка не
+  // выкидывала обратно в чат посреди правки конфига.
+  @state() private _tab: 'chat' | 'settings' =
+    location.hash === '#settings' ? 'settings' : 'chat';
+  #onHashChange: (() => void) | undefined;
+
   @state() private _agents: AgentInfo[] = [];
   // Причина, по которой список агентов не удалось загрузить. Панель выбора
   // никогда не исчезает молча: либо список, либо видимая ошибка.
@@ -190,6 +197,10 @@ export class OrdersApp extends LitElement {
     // а список грузится один раз — поэтому обновляем его периодически, иначе
     // на живом агенте навсегда останется пометка «недоступен».
     this.#agentsPoll = setInterval(() => void this.#loadAgents(), 30_000);
+    this.#onHashChange = () => {
+      this._tab = location.hash === '#settings' ? 'settings' : 'chat';
+    };
+    window.addEventListener('hashchange', this.#onHashChange);
   }
 
   disconnectedCallback() {
@@ -197,6 +208,12 @@ export class OrdersApp extends LitElement {
     clearInterval(this.#agentsPoll);
     clearTimeout(this.#agentsRetry);
     clearInterval(this.#tick);
+    if (this.#onHashChange) window.removeEventListener('hashchange', this.#onHashChange);
+  }
+
+  #selectTab(tab: 'chat' | 'settings') {
+    this._tab = tab;
+    location.hash = tab === 'settings' ? '#settings' : '';
   }
 
   async #loadAgents() {
@@ -326,6 +343,32 @@ export class OrdersApp extends LitElement {
     h2 {
       font-weight: 700;
       margin-bottom: 8px;
+    }
+    /* Чат прячется, но остаётся в DOM: в _items лежат живые A2UI-поверхности,
+       и пересоздавать <a2ui-surface> на каждом переключении вкладки —
+       напрашиваться на «Surface … already exists». */
+    [hidden] {
+      display: none !important;
+    }
+    .tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 12px;
+      border-bottom: 1px solid #e1e4e8;
+    }
+    .tab {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 8px 8px 0 0;
+      background: transparent;
+      color: #57606a;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .tab.active {
+      background: #f0f1f3;
+      color: #0b57d0;
     }
     .agent-bar {
       display: flex;
@@ -580,6 +623,28 @@ export class OrdersApp extends LitElement {
       this._agentId !== AUTO_AGENT && !selected ? this._agentId : '';
     return html`
       <h2>Ассистент заказов · A2UI</h2>
+      <nav class="tabs">
+        <button
+          type="button"
+          class=${this._tab === 'chat' ? 'tab active' : 'tab'}
+          @click=${() => this.#selectTab('chat')}
+        >
+          Чат
+        </button>
+        <button
+          type="button"
+          class=${this._tab === 'settings' ? 'tab active' : 'tab'}
+          @click=${() => this.#selectTab('settings')}
+        >
+          Настройки
+        </button>
+      </nav>
+      ${this._tab === 'settings'
+        ? html`<agent-settings
+            @agents-changed=${() => void this.#loadAgents()}
+          ></agent-settings>`
+        : nothing}
+      <div class="chat" ?hidden=${this._tab !== 'chat'}>
       ${html`<div class="agent-bar">
             <label for="agent">Агент:</label>
             <!-- Выбранность отмечается на самих <option>, а не через .value
@@ -665,6 +730,7 @@ export class OrdersApp extends LitElement {
             )}
           </details>`
         : nothing}
+      </div>
     `;
   }
 }

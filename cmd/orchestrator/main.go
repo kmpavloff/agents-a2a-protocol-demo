@@ -15,6 +15,7 @@ import (
 
 	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/a2abridge"
 	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/agent"
+	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/agentstore"
 	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/config"
 	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/llm"
 	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/tui"
@@ -48,11 +49,20 @@ func main() {
 	trace := a2abridge.NewTracer(traceW, "[A2A client] ")
 	log.Printf("A2A protocol trace → %s", traceDst)
 
-	reg := a2abridge.NewRegistry(cfg.Agents, trace)
+	// Правки из UI лежат отдельным файлом поверх рукописного конфига.
+	store, err := agentstore.New(cfg.Agents, cfg.AgentsOverlayPath)
+	if err != nil {
+		log.Fatalf("agents overlay: %v", err)
+	}
+	agents := store.Agents()
+	reg := a2abridge.NewRegistry(agents, trace)
+	// Правка из UI доезжает до живого реестра: новый агент появляется в
+	// селекторе и в режиме «Авто» без перезапуска.
+	store.OnChange(reg.Apply)
 	model := llm.New(cfg.LLM)
 	log.Printf("orchestrator | LLM=%s model=%q", cfg.LLM.BaseURL, cfg.LLM.Model)
-	log.Printf("agents (%d):", len(cfg.Agents))
-	for _, a := range cfg.Agents {
+	log.Printf("agents (%d), overlay %s:", len(agents), cfg.AgentsOverlayPath)
+	for _, a := range agents {
 		// Пароль сюда не попадает намеренно: логи демо показывают целиком.
 		log.Printf("  - %s → %s (card %s, skill=%q, verbatim=%v, timeout=%s)",
 			a.ID, a.URL, a.CardPath, a.Skill, a.Verbatim, a.TimeoutDuration())
@@ -88,6 +98,8 @@ func main() {
 		mux.Handle(a2asrv.WellKnownAgentCardPath, a2asrv.NewStaticAgentCardHandler(a2abridge.OrchestratorCard(cfg.PublicURL)))
 		// Список агентов для селектора в браузере.
 		mux.Handle("/api/agents", webui.AgentsHandler(reg.List))
+		// Правка списка агентов из браузера.
+		webui.RegisterAgentConfig(mux, store)
 		// Embedded frontend.
 		mux.Handle("/", webui.Handler())
 		log.Printf("orchestrator web UI on %s", cfg.ListenAddr)
@@ -97,7 +109,13 @@ func main() {
 
 	// Терминальный REPL выбора агента не даёт и работает с первым агентом
 	// списка — то есть после миграции с worker_url ведёт себя как раньше.
+	// LoadOrchestrator гарантирует минимум одного агента в БАЗОВОМ списке, но
+	// overlay может скрыть их все — тогда reg.First() вернёт nil, и без этой
+	// проверки первое же обращение к nil-агенту падало бы нил-паникой.
 	first := reg.First()
+	if first == nil {
+		log.Fatalf("нет ни одного агента: все скрыты в %s — удалите файл или верните агента через UI", cfg.AgentsOverlayPath)
+	}
 	if err := first.Connect(ctx); err != nil {
 		log.Fatalf("agent %q (запущен ли он?): %v", first.ID(), err)
 	}

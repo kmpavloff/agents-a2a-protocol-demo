@@ -93,3 +93,113 @@ func TestRegistryKeepsConfigOrderAndCachesClients(t *testing.T) {
 		t.Error("ClientFor must report an unknown id")
 	}
 }
+
+// Нетронутый агент должен пережить правку соседа: в его *Remote лежат живое
+// соединение и зависшая input-required задача, и терять их из-за чужой правки
+// нельзя.
+func TestApplyKeepsUnchangedRemotes(t *testing.T) {
+	s := startOuroborosStub(t, false)
+	a := ouroborosCfg(s.URL)
+	a.ID = "one"
+	b := ouroborosCfg(s.URL)
+	b.ID = "two"
+	g := NewRegistry([]config.AgentConfig{a, b}, nil)
+
+	before, _ := g.Get("one")
+	changed := b
+	changed.Name = "Другое имя"
+	g.Apply([]config.AgentConfig{a, changed})
+
+	after, ok := g.Get("one")
+	if !ok || before != after {
+		t.Error("нетронутый агент пересоздан")
+	}
+	two, ok := g.Get("two")
+	if !ok || two.Name() != "Другое имя" {
+		t.Errorf("изменённый агент не обновлён: %v", ok)
+	}
+}
+
+func TestApplyAddsAndRemoves(t *testing.T) {
+	s := startOuroborosStub(t, false)
+	a := ouroborosCfg(s.URL)
+	a.ID = "one"
+	g := NewRegistry([]config.AgentConfig{a}, nil)
+
+	b := ouroborosCfg(s.URL)
+	b.ID = "two"
+	g.Apply([]config.AgentConfig{b})
+
+	if _, ok := g.Get("one"); ok {
+		t.Error("удалённый агент остался в реестре")
+	}
+	if _, ok := g.Get("two"); !ok {
+		t.Error("новый агент не появился")
+	}
+	if ids := g.IDs(); len(ids) != 1 || ids[0] != "two" {
+		t.Errorf("порядок: %v", ids)
+	}
+}
+
+// Изменённый агент теряет и кэшированного клиента: тот держит ссылку на старый
+// *Remote и продолжал бы ходить по прежнему адресу.
+func TestApplyDropsClientOfChangedAgent(t *testing.T) {
+	s := startOuroborosStub(t, false)
+	a := ouroborosCfg(s.URL)
+	a.ID = "one"
+	g := NewRegistry([]config.AgentConfig{a}, nil)
+	before, _ := g.ClientFor("one")
+
+	changed := a
+	changed.Name = "Другое"
+	g.Apply([]config.AgentConfig{changed})
+
+	after, _ := g.ClientFor("one")
+	if before == after {
+		t.Error("клиент изменённого агента должен быть пересоздан")
+	}
+}
+
+func TestApplyBumpsGeneration(t *testing.T) {
+	s := startOuroborosStub(t, false)
+	a := ouroborosCfg(s.URL)
+	a.ID = "one"
+	g := NewRegistry([]config.AgentConfig{a}, nil)
+	gen := g.Generation()
+
+	same := a
+	g.Apply([]config.AgentConfig{same})
+	if g.Generation() != gen {
+		t.Error("поколение не должно расти, когда ничего не изменилось")
+	}
+
+	changed := a
+	changed.URL = "http://127.0.0.1:1"
+	g.Apply([]config.AgentConfig{changed})
+	if g.Generation() == gen {
+		t.Error("поколение должно вырасти после правки")
+	}
+}
+
+// Клиент, созданный уже после старта, обязан получить те же обработчики, что и
+// созданные в конструкторе исполнителя, — иначе виджеты нового агента молча
+// пропадут.
+func TestClientInitRunsForLaterClients(t *testing.T) {
+	s := startOuroborosStub(t, false)
+	a := ouroborosCfg(s.URL)
+	a.ID = "one"
+	g := NewRegistry([]config.AgentConfig{a}, nil)
+
+	var inited []string
+	g.SetClientInit(func(c *OrdersClient) { inited = append(inited, c.Profile().ToolName) })
+
+	b := ouroborosCfg(s.URL)
+	b.ID = "two"
+	g.Apply([]config.AgentConfig{a, b})
+	if _, ok := g.ClientFor("two"); !ok {
+		t.Fatal("клиент нового агента не создан")
+	}
+	if len(inited) != 1 {
+		t.Fatalf("SetClientInit вызван %d раз(а), want 1", len(inited))
+	}
+}

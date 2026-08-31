@@ -84,52 +84,68 @@ type OrchestratorConfig struct {
 	WorkerURL  string        `yaml:"worker_url"`
 	Agents     []AgentConfig `yaml:"agents"`
 	A2ALogPath string        `yaml:"a2a_log_path"` // file for A2A protocol trace; empty disables
-	LLM        LLMConfig     `yaml:"llm"`
+	// AgentsOverlayPath — файл с правками списка агентов, сделанными из UI.
+	// Лежит отдельно от этого конфига: тот рукописный, и машинная перезапись
+	// стёрла бы объясняющие комментарии.
+	AgentsOverlayPath string    `yaml:"agents_overlay_path"`
+	LLM               LLMConfig `yaml:"llm"`
 }
 
 var agentIDRe = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 
-// envAgent строит имя переменной окружения для поля агента: пароль незачем
-// держать в файле, а адрес приходится подменять при запуске в контейнере.
-func envAgent(id, field string) string {
+// AgentEnvVar возвращает имя переменной окружения для поля агента: пароль
+// незачем держать в файле, а адрес приходится подменять при запуске в
+// контейнере. field — "URL" или "PASSWORD".
+func AgentEnvVar(id, field string) string {
 	return "A2A_AGENT_" + strings.ToUpper(strings.ReplaceAll(id, "-", "_")) + "_" + field
 }
 
-// applyAgentDefaults подставляет умолчания и env-перекрытия, затем валидирует
-// список агентов.
-func applyAgentDefaults(agents []AgentConfig) error {
+// ValidateAgent проверяет одну запись агента — то же, что делает загрузка
+// конфига, но без env-перекрытий и без проверки на дубликаты. Отдельно нужна
+// затем, что запись из UI проверяется до того, как попадёт в список.
+func ValidateAgent(a AgentConfig) error {
+	if !agentIDRe.MatchString(a.ID) {
+		return fmt.Errorf("agent id %q must match %s", a.ID, agentIDRe)
+	}
+	if a.URL == "" {
+		return fmt.Errorf("agent %q: url is required", a.ID)
+	}
+	if a.Timeout != "" {
+		if d, err := time.ParseDuration(a.Timeout); err != nil || d <= 0 {
+			return fmt.Errorf("agent %q: bad timeout %q", a.ID, a.Timeout)
+		}
+	}
+	switch a.Auth.Type {
+	case "", "basic":
+	default:
+		return fmt.Errorf("agent %q: unsupported auth type %q", a.ID, a.Auth.Type)
+	}
+	return nil
+}
+
+// NormalizeAgents подставляет умолчания и env-перекрытия, затем валидирует
+// список. Применяется и к списку из YAML, и к слитому с overlay — поэтому
+// env остаётся последним словом в обоих случаях.
+func NormalizeAgents(agents []AgentConfig) error {
 	seen := make(map[string]bool, len(agents))
 	for i := range agents {
 		a := &agents[i]
-		if !agentIDRe.MatchString(a.ID) {
-			return fmt.Errorf("orchestrator config: agent id %q must match %s", a.ID, agentIDRe)
+		// Адрес перекрывается окружением: в контейнере агент живёт по другому
+		// имени, чем на машине разработчика, а конфиг один и тот же.
+		if u := os.Getenv(AgentEnvVar(a.ID, "URL")); u != "" {
+			a.URL = u
+		}
+		if err := ValidateAgent(*a); err != nil {
+			return fmt.Errorf("orchestrator config: %w", err)
 		}
 		if seen[a.ID] {
 			return fmt.Errorf("orchestrator config: duplicate agent id %q", a.ID)
 		}
 		seen[a.ID] = true
-		// Адрес перекрывается окружением: в контейнере агент живёт по другому
-		// имени, чем на машине разработчика, а конфиг один и тот же.
-		if u := os.Getenv(envAgent(a.ID, "URL")); u != "" {
-			a.URL = u
-		}
-		if a.URL == "" {
-			return fmt.Errorf("orchestrator config: agent %q: url is required", a.ID)
-		}
 		if a.CardPath == "" {
 			a.CardPath = defaultCardPath
 		}
-		if a.Timeout != "" {
-			if d, err := time.ParseDuration(a.Timeout); err != nil || d <= 0 {
-				return fmt.Errorf("orchestrator config: agent %q: bad timeout %q", a.ID, a.Timeout)
-			}
-		}
-		switch a.Auth.Type {
-		case "", "basic":
-		default:
-			return fmt.Errorf("orchestrator config: agent %q: unsupported auth type %q", a.ID, a.Auth.Type)
-		}
-		if p := os.Getenv(envAgent(a.ID, "PASSWORD")); p != "" {
+		if p := os.Getenv(AgentEnvVar(a.ID, "PASSWORD")); p != "" {
 			a.Auth.Password = p
 		}
 	}
@@ -189,6 +205,10 @@ func LoadOrchestrator(path string) (OrchestratorConfig, error) {
 	if c.A2ALogPath == "" {
 		c.A2ALogPath = "a2a-orchestrator.log"
 	}
+	c.AgentsOverlayPath = env("A2A_AGENTS_OVERLAY_PATH", c.AgentsOverlayPath)
+	if c.AgentsOverlayPath == "" {
+		c.AgentsOverlayPath = "configs/agents.local.yaml"
+	}
 	if c.ListenAddr == "" {
 		c.ListenAddr = ":8080"
 	}
@@ -203,7 +223,7 @@ func LoadOrchestrator(path string) (OrchestratorConfig, error) {
 	if len(c.Agents) == 0 {
 		return c, fmt.Errorf("orchestrator config: at least one agent (agents: or worker_url:) is required")
 	}
-	if err := applyAgentDefaults(c.Agents); err != nil {
+	if err := NormalizeAgents(c.Agents); err != nil {
 		return c, err
 	}
 	if c.LLM.BaseURL == "" {
