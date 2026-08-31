@@ -52,6 +52,7 @@ type orchExecutor struct {
 
 	mu      sync.Mutex
 	runners map[string]*runner.Runner   // agentId (или "auto") → runner
+	gen     uint64                      // поколение реестра, под которое собран кэш runner'ов
 	widgets map[string][]map[string]any // sessionID → widgets produced this turn
 	a2uis   map[string][]map[string]any // sessionID → A2UI messages produced this turn
 	files   map[string][]attachedFile   // sessionID → files produced this turn
@@ -71,12 +72,10 @@ func NewOrchestratorExecutor(reg *Registry, build RunnerBuilder, trace *Tracer) 
 		a2uis:   make(map[string][]map[string]any),
 		files:   make(map[string][]attachedFile),
 	}
-	// One handler per agent routes each widget/A2UI/file to its session's slot.
-	for _, id := range reg.IDs() {
-		c, ok := reg.ClientFor(id)
-		if !ok {
-			continue
-		}
+	// Обработчики вешаются на КАЖДОГО клиента, включая созданных после правки
+	// конфига: разовый цикл по нынешним агентам оставил бы новых без них, и
+	// их виджеты молча пропадали бы.
+	reg.SetClientInit(func(c *OrdersClient) {
 		c.SetWidgetHandler(func(sessionID string, w map[string]any) {
 			e.mu.Lock()
 			e.widgets[sessionID] = append(e.widgets[sessionID], w)
@@ -92,7 +91,8 @@ func NewOrchestratorExecutor(reg *Registry, build RunnerBuilder, trace *Tracer) 
 			e.files[sessionID] = append(e.files[sessionID], attachedFile{name: filename, mediaType: mediaType, data: data})
 			e.mu.Unlock()
 		})
-	}
+	})
+	e.gen = reg.Generation()
 	return e
 }
 
@@ -118,6 +118,15 @@ func (e *orchExecutor) selectAgent(msg *a2a.Message) string {
 // "auto" mode, or with exactly one tool when the user picked an agent. Runners
 // are cached per selection.
 func (e *orchExecutor) runnerFor(ctx context.Context, agentID string) (*runner.Runner, error) {
+	// Состав агентов мог измениться из UI. Кэш собран под прежний: в нём и
+	// старое описание в промпте, и инструмент удалённого агента.
+	if gen := e.reg.Generation(); gen != e.gen {
+		e.mu.Lock()
+		clear(e.runners)
+		e.gen = gen
+		e.mu.Unlock()
+	}
+
 	cacheKey := agentID
 	if agentID != autoAgentID {
 		e.mu.Lock()
