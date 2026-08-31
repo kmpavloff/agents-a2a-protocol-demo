@@ -135,6 +135,33 @@ func TestDeleteAndResetAgent(t *testing.T) {
 	}
 }
 
+// У агента, целиком заведённого через UI, нет базовой версии — форма не
+// должна предлагать «Сбросить к конфигу» для него.
+func TestCreatedAgentHasNoCanReset(t *testing.T) {
+	mux, _ := newMux(t)
+	do(t, mux, http.MethodPost, "/api/agents/config", `{"id":"shop","url":"http://localhost:9100"}`)
+	rec := do(t, mux, http.MethodGet, "/api/agents/config", "")
+	var out []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("ответ не JSON: %s", rec.Body)
+	}
+	var shop map[string]any
+	for _, a := range out {
+		if a["id"] == "shop" {
+			shop = a
+		}
+		if a["id"] == "orders" && a["canReset"] != true {
+			t.Errorf("у файлового агента canReset должен быть true: %+v", a)
+		}
+	}
+	if shop == nil {
+		t.Fatal("заведённый агент не найден в ответе")
+	}
+	if shop["canReset"] != false {
+		t.Errorf("у UI-агента canReset должен быть false: %+v", shop)
+	}
+}
+
 // Скрытый агент остаётся в списке настроек — иначе вернуть его можно было бы
 // только правкой файла.
 func TestHiddenAgentStaysInConfigList(t *testing.T) {

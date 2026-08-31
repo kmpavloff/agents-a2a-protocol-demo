@@ -15,6 +15,9 @@ interface AgentConfig {
   hidden: boolean;
   source: 'file' | 'ui';
   envLocked: string[];
+  // Есть ли базовая версия в orchestrator.yaml. У агента, целиком заведённого
+  // через UI, её нет — «Сбросить к конфигу» для него означало бы удаление.
+  canReset: boolean;
 }
 
 /** Живой статус из GET /api/agents — им же питается селектор в чате. */
@@ -34,7 +37,7 @@ const EMPTY: Draft = {
   id: '', name: '', url: '', cardPath: '', skill: '', verbatim: false,
   timeout: '', description: '',
   auth: {type: '', username: '', hasPassword: false},
-  hidden: false, source: 'ui', envLocked: [], password: '', isNew: true,
+  hidden: false, source: 'ui', envLocked: [], canReset: false, password: '', isNew: true,
 };
 
 @customElement('agent-settings')
@@ -382,11 +385,18 @@ export class AgentSettings extends LitElement {
       </div>
 
       <label for="f-auth">Аутентификация</label>
-      <select id="f-auth"
+      <!-- .value на самом select, а не ?selected на <option>: элемент
+           переиспользуется между агентами (Lit сверяет шаблон по позиции), и
+           dirty-флаг, взведённый переключением у одного агента, глушит
+           дальнейшие изменения атрибута selected при открытии другого. Опции
+           здесь статические дети того же шаблона, так что оговорка из
+           app.ts про пустой селектор при появлении дочерних узлов позже сюда
+           не относится. -->
+      <select id="f-auth" .value=${d.auth.type}
         @change=${(e: Event) =>
           this.#patch({auth: {...d.auth, type: (e.target as HTMLSelectElement).value}})}>
-        <option value="" ?selected=${d.auth.type === ''}>нет</option>
-        <option value="basic" ?selected=${d.auth.type === 'basic'}>HTTP Basic</option>
+        <option value="">нет</option>
+        <option value="basic">HTTP Basic</option>
       </select>
 
       ${d.auth.type === 'basic'
@@ -417,7 +427,7 @@ export class AgentSettings extends LitElement {
         <button class="ghost" ?disabled=${this._busy} @click=${() => (this._draft = null)}>
           Отмена
         </button>
-        ${!d.isNew && d.source === 'ui'
+        ${!d.isNew && d.canReset
           ? html`<button class="ghost" ?disabled=${this._busy}
               title="Забыть правки из UI и вернуть версию из orchestrator.yaml"
               @click=${() => void this.#reset(d)}>

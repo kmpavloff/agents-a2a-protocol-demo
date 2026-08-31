@@ -25,6 +25,11 @@ type agentOut struct {
 	Hidden      bool     `json:"hidden"`
 	Source      string   `json:"source"`
 	EnvLocked   []string `json:"envLocked"`
+	// CanReset — есть ли у агента базовая версия из orchestrator.yaml, к
+	// которой имеет смысл вернуться. У агента, целиком заведённого через UI,
+	// такой версии нет: «сброс» для него означал бы безвозвратное удаление, а
+	// это дело кнопки «Удалить» с подтверждением, а не «Сбросить к конфигу».
+	CanReset bool `json:"canReset"`
 }
 
 type authOut struct {
@@ -75,7 +80,7 @@ func toOut(r agentstore.Record) agentOut {
 		Auth: authOut{
 			Type: r.Auth.Type, Username: r.Auth.Username, HasPassword: r.HasPassword,
 		},
-		Hidden: r.Hidden, Source: r.Source, EnvLocked: locked,
+		Hidden: r.Hidden, Source: r.Source, EnvLocked: locked, CanReset: r.InFile,
 	}
 }
 
@@ -151,7 +156,11 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		// Заголовок уже ушёл — остаётся только не молчать в логе.
+		// Заголовок статуса уже отправлен WriteHeader выше — исправить ответ
+		// или сообщить о нём вызывающему уже нельзя, клиент получит оборванное
+		// тело. Здесь намеренно ничего не залогировано: пакет webui не хранит
+		// логгер, а это демо-стенд, где такой отказ (кодирование JSON из своих
+		// же типов) практически недостижим.
 		return
 	}
 }

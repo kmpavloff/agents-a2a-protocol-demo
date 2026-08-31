@@ -622,6 +622,7 @@ export class OrdersApp extends LitElement {
     const orphanSelection =
       this._agentId !== AUTO_AGENT && !selected ? this._agentId : '';
     return html`
+      <h2>Ассистент заказов · A2UI</h2>
       <nav class="tabs">
         <button
           type="button"
@@ -643,7 +644,6 @@ export class OrdersApp extends LitElement {
             @agents-changed=${() => void this.#loadAgents()}
           ></agent-settings>`
         : nothing}
-      <h2>Ассистент заказов · A2UI</h2>
       <div class="chat" ?hidden=${this._tab !== 'chat'}>
       ${html`<div class="agent-bar">
             <label for="agent">Агент:</label>

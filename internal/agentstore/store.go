@@ -76,6 +76,13 @@ type Record struct {
 	Source      string // "file" — только из YAML, "ui" — есть overlay-запись
 	HasPassword bool
 	EnvLocked   []string // поля, перекрытые окружением: "url", "password"
+	// InFile — есть ли у агента версия в базовом (рукописном) списке. Source
+	// говорит лишь о том, есть ли overlay-запись, а её наличие означает разное
+	// для двух разных сущностей: файловый агент с правкой из UI (сброс вернёт
+	// версию из YAML) и агент, целиком заведённый через UI (базовой версии нет
+	// вовсе, и «сброс» для него — это удаление). InFile разводит их для кнопки
+	// «Сбросить к конфигу».
+	InFile bool
 }
 
 // Store владеет списком агентов: рукописной базой из orchestrator.yaml и
@@ -150,7 +157,7 @@ func (s *Store) Records() []Record {
 		if fromOverlay {
 			source = "ui"
 		}
-		r := Record{AgentConfig: a, Hidden: hidden, Source: source}
+		r := Record{AgentConfig: a, Hidden: hidden, Source: source, InFile: s.inBase(a.ID)}
 		// Показываем действующее значение, а не то, что лежит в файле: адрес
 		// мог быть перекрыт окружением, и правка такого поля ничего не даст.
 		if u := os.Getenv(config.AgentEnvVar(a.ID, "URL")); u != "" {
@@ -208,9 +215,16 @@ func indexOver(over []Override, id string) int {
 	return slices.IndexFunc(over, func(o Override) bool { return o.ID == id })
 }
 
+// inBase отвечает, есть ли у агента версия в базовом (рукописном) списке —
+// той, что приезжает из orchestrator.yaml и не может быть удалена, только
+// скрыта.
+func (s *Store) inBase(id string) bool {
+	return slices.ContainsFunc(s.base, func(a config.AgentConfig) bool { return a.ID == id })
+}
+
 // known отвечает, знает ли Store такого агента — в базе или в overlay.
 func (s *Store) known(id string) bool {
-	if slices.ContainsFunc(s.base, func(a config.AgentConfig) bool { return a.ID == id }) {
+	if s.inBase(id) {
 		return true
 	}
 	return indexOver(s.over, id) >= 0
@@ -248,8 +262,16 @@ func (s *Store) Update(id string, a config.AgentConfig) error {
 	if err := config.ValidateAgent(a); err != nil {
 		return err
 	}
-	if a.Auth.Password == "" {
+	// Пароль и адрес, перекрытые окружением, в overlay не пишем: форма
+	// показывает действующее (env-) значение, и если переносить его в файл как
+	// есть, секрет из переменной окружения осел бы открытым текстом на диске, а
+	// адрес конкретного контейнера заморозился бы в конфиге стенда. Слияние
+	// всё равно даст env последнее слово — важно только, что уходит на диск.
+	if a.Auth.Password == "" && os.Getenv(config.AgentEnvVar(id, "PASSWORD")) == "" {
 		a.Auth.Password = s.currentPassword(id)
+	}
+	if os.Getenv(config.AgentEnvVar(id, "URL")) != "" {
+		a.URL = s.currentURL(id)
 	}
 	over := slices.Clone(s.over)
 	if i := indexOver(over, id); i >= 0 {
@@ -273,6 +295,23 @@ func (s *Store) currentPassword(id string) string {
 	return ""
 }
 
+// currentURL достаёт адрес агента, каким он был в overlay/базе ДО текущей
+// правки, — из overlay, иначе из базы. Нужен, когда адрес перекрыт
+// окружением: писать в файл значение, которое форма показала пользователю
+// (оно и есть env-значение), нельзя — иначе стенд-специфичный адрес
+// заморозится в overlay навсегда.
+func (s *Store) currentURL(id string) string {
+	if i := indexOver(s.over, id); i >= 0 {
+		return s.over[i].URL
+	}
+	for _, b := range s.base {
+		if b.ID == id {
+			return b.URL
+		}
+	}
+	return ""
+}
+
 // Delete убирает агента. Заведённый через UI исчезает совсем, пришедший из
 // YAML помечается скрытым: базовый файл рукописный, и мы его не трогаем.
 func (s *Store) Delete(id string) error {
@@ -281,7 +320,7 @@ func (s *Store) Delete(id string) error {
 	if !s.known(id) {
 		return fmt.Errorf("%w: %q", ErrNotFound, id)
 	}
-	inBase := slices.ContainsFunc(s.base, func(a config.AgentConfig) bool { return a.ID == id })
+	inBase := s.inBase(id)
 	over := slices.Clone(s.over)
 	i := indexOver(over, id)
 	switch {
@@ -296,10 +335,15 @@ func (s *Store) Delete(id string) error {
 }
 
 // Reset забывает overlay-запись: агент возвращается к версии из YAML, а
-// скрытый — в список. Без overlay-записи сбрасывать нечего.
+// скрытый — в список. Без базовой версии сбрасывать некуда: агент, целиком
+// заведённый через UI, при таком «сбросе» просто исчез бы — это дело Delete,
+// а не Reset, и делается через явное подтверждение.
 func (s *Store) Reset(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.inBase(id) {
+		return fmt.Errorf("%w: %q", ErrNotFound, id)
+	}
 	i := indexOver(s.over, id)
 	if i < 0 {
 		return fmt.Errorf("%w: %q", ErrNotFound, id)

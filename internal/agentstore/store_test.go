@@ -129,6 +129,9 @@ func TestStoreUpdateOverridesFileAgent(t *testing.T) {
 	if recs[0].Source != "ui" {
 		t.Errorf("источник: got %q, want ui", recs[0].Source)
 	}
+	if !recs[0].InFile {
+		t.Error("у файлового агента с overlay-правкой InFile должен остаться true")
+	}
 }
 
 // Пустой пароль в запросе означает «не менять»: наружу мы его не отдаём, и
@@ -154,6 +157,66 @@ func TestStoreUpdateKeepsPasswordWhenEmpty(t *testing.T) {
 	}
 	if agents[1].Name != "Новое имя" {
 		t.Errorf("остальные поля не применились: %+v", agents[1])
+	}
+}
+
+// Пароль и адрес, перекрытые окружением, не должны осесть в overlay-файле:
+// иначе секрет из переменной окружения уходит на диск открытым текстом, а
+// адрес конкретного контейнера замерзает в конфиге стенда.
+func TestStoreUpdateDoesNotPersistEnvOverrides(t *testing.T) {
+	t.Setenv("A2A_AGENT_OUROBOROS_URL", "http://from-env:18800")
+	t.Setenv("A2A_AGENT_OUROBOROS_PASSWORD", "env-секрет")
+	s, p := newStore(t)
+
+	// Форма показывает пользователю действующее (env-) значение — Records его
+	// и присылает обратно нетронутым, если пользователь его не трогал.
+	recs := s.Records()
+	var rec Record
+	for _, r := range recs {
+		if r.ID == "ouroboros" {
+			rec = r
+		}
+	}
+	if rec.URL != "http://from-env:18800" || !rec.HasPassword {
+		t.Fatalf("Records должен показывать env-значения: %+v", rec)
+	}
+
+	// Пользователь правит только имя; адрес приходит env-значением (как его
+	// показала форма), пароль — пустым (как его прислала бы форма, раз
+	// показать реальный пароль нельзя).
+	edited := config.AgentConfig{
+		ID: "ouroboros", Name: "Новое имя", URL: rec.URL,
+	}
+	if err := s.Update("ouroboros", edited); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	over, err := loadOverlay(p)
+	if err != nil {
+		t.Fatalf("loadOverlay: %v", err)
+	}
+	i := indexOver(over, "ouroboros")
+	if i < 0 {
+		t.Fatal("overlay-запись не создана")
+	}
+	if over[i].URL == "http://from-env:18800" {
+		t.Errorf("env-адрес попал в overlay-файл: %q", over[i].URL)
+	}
+	if over[i].URL != "http://192.168.1.68:18800" {
+		t.Errorf("в overlay должен остаться прежний (базовый) адрес, а не env: %q", over[i].URL)
+	}
+	if over[i].Auth.Password != "" {
+		t.Errorf("env-пароль попал в overlay-файл: %q", over[i].Auth.Password)
+	}
+
+	// Действующий список при этом всё равно живёт по env — слияние остаётся
+	// последним словом окружения.
+	agents := s.Agents()
+	if agents[1].URL != "http://from-env:18800" {
+		t.Errorf("env должен оставаться последним словом при слиянии: %+v", agents[1])
+	}
+	if agents[1].Name != "Новое имя" {
+		t.Errorf("остальные поля должны были примениться: %+v", agents[1])
 	}
 }
 
@@ -219,6 +282,33 @@ func TestStoreResetRestoresFileVersion(t *testing.T) {
 	}
 	if err := s.Reset("orders"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("сброс без overlay-записи: got %v, want ErrNotFound", err)
+	}
+}
+
+// Агент, целиком заведённый через UI, базовой версии не имеет — «сброс» для
+// него не может ничего вернуть и обязан отказать, а не молча стереть агента.
+func TestStoreResetRejectsUIOnlyAgent(t *testing.T) {
+	s, _ := newStore(t)
+	if err := s.Create(config.AgentConfig{ID: "shop", URL: "http://localhost:9100"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Reset("shop"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("сброс UI-агента: got %v, want ErrNotFound", err)
+	}
+	// Агент должен остаться на месте — «сброс» не должен был его стереть.
+	found := false
+	for _, a := range s.Agents() {
+		if a.ID == "shop" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("UI-агент исчез после неудавшегося Reset")
+	}
+	for _, r := range s.Records() {
+		if r.ID == "shop" && r.InFile {
+			t.Error("у UI-агента не должно быть InFile")
+		}
 	}
 }
 
