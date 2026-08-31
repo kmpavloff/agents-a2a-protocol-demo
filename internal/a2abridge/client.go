@@ -39,6 +39,11 @@ type OrdersClient struct {
 	// onA2UI, if set, receives A2UI messages a remote agent produced itself
 	// (as opposed to widgets our gateway maps). Same routing by session id.
 	onA2UI func(sessionID string, msgs []map[string]any)
+	// onText, if set, receives the agent's own answer text. Не для показа: он
+	// уходит модели как результат инструмента и обычно ей же и пересказывается.
+	// Нужен как запас на ход, в котором карточки не окажется, — тогда данные
+	// есть только здесь (см. pickAnswer в orchserver.go).
+	onText func(sessionID, text string)
 }
 
 // SetWidgetHandler registers a callback for widgets (DataParts) the worker
@@ -56,6 +61,10 @@ func (c *OrdersClient) SetFileHandler(fn func(sessionID, filename, mediaType str
 func (c *OrdersClient) SetA2UIHandler(fn func(sessionID string, msgs []map[string]any)) {
 	c.onA2UI = fn
 }
+
+// SetTextHandler registers a callback for the agent's own answer text. Runs on
+// the delegating tool's goroutine.
+func (c *OrdersClient) SetTextHandler(fn func(sessionID, text string)) { c.onText = fn }
 
 // NewOrdersClientFromRemote wraps an already-configured remote agent.
 func NewOrdersClientFromRemote(r *Remote) *OrdersClient {
@@ -121,6 +130,9 @@ func (c *OrdersClient) forward(sessionID string, reply Reply) {
 			c.trace.Logf("    ⟐ file part %q (%s, %d bytes) → UI", f.name, f.mediaType, len(f.data))
 			c.onFile(sessionID, f.name, f.mediaType, f.data)
 		}
+	}
+	if c.onText != nil && strings.TrimSpace(reply.Text) != "" {
+		c.onText(sessionID, reply.Text)
 	}
 }
 

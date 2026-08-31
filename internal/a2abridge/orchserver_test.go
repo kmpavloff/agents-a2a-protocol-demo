@@ -591,7 +591,103 @@ func TestExecutorWiresHandlersForNewAgents(t *testing.T) {
 		t.Fatal("клиент нового агента не создан")
 	}
 	c.onWidget("сессия", map[string]any{"_kind": "widget/order"})
-	if ws, _, _ := e.drain("сессия"); len(ws) != 1 {
+	if ws, _, _, _ := e.drain("сессия"); len(ws) != 1 {
 		t.Errorf("виджет нового агента потерян: %+v", ws)
+	}
+}
+
+// textOnlyReply — ответ агента без A2UI: одна текстовая часть. Так внешний
+// агент отвечает, когда решил обойтись без разметки, хотя объявляет её.
+const textOnlyReply = `{"jsonrpc":"2.0","id":"1","result":{"id":"t1","contextId":"c1",
+ "status":{"state":"TASK_STATE_COMPLETED","message":{"messageId":"m1","role":"ROLE_AGENT",
+   "parts":[{"text":"**ORD-001 — доставлен**\n\nКлиент: Иван Петров\nСумма: 3 499 ₽\nТрек-номер: RU123456789","mediaType":"text/plain"}]}}}}`
+
+// stubRunner собирает runner на сценарном стабе модели: сначала вызов
+// делегирующего инструмента, затем заданный текст.
+func stubRunner(t *testing.T, toolName, finalText string) RunnerBuilder {
+	t.Helper()
+	return func(tools []tool.Tool, summary string) (*runner.Runner, error) {
+		model := llm.NewStub(
+			llm.StubTurn{Call: &genai.FunctionCall{
+				Name: toolName, Args: map[string]any{"message": "статус заказа ORD-001"},
+			}},
+			llm.StubTurn{Text: finalText},
+		)
+		ag, err := agent.NewOrchestrator(model, tools, summary)
+		if err != nil {
+			return nil, err
+		}
+		return runner.New(runner.Config{
+			AppName: "orch", Agent: ag,
+			SessionService: session.InMemoryService(), AutoCreateSession: true,
+		})
+	}
+}
+
+// Промпт запрещает модели называть значения: их покажет карточка. Когда
+// карточки нет — внешний агент прислал один текст, — подводка «Вот детали
+// вашего заказа:» остаётся единственным, что видит пользователь, и данные
+// пропадают. В ленту должен уйти ответ самого агента.
+func TestLLMTurnFallsBackToAgentTextWithoutWidget(t *testing.T) {
+	s := startOuroborosStub(t, false)
+	s.reply = textOnlyReply
+	cfg := ouroborosCfg(s.URL)
+	cfg.Verbatim = false // ход идёт через локальную модель, а не напрямую
+	reg := NewRegistry([]config.AgentConfig{cfg}, nil)
+	url := serveExecutor(t,
+		NewOrchestratorExecutor(reg, stubRunner(t, "ask_ouroboros", "Вот детали вашего заказа:"), nil),
+		OrchestratorCard)
+
+	probe := newA2UIClient(t, url)
+	parts := probe.sendText(t, "статус заказа ORD-001")
+
+	text := ""
+	for _, p := range parts {
+		if p != nil && !isA2UIPart(p) && p.Text() != "" {
+			text = p.Text()
+		}
+	}
+	if !strings.Contains(text, "RU123456789") {
+		t.Errorf("данные агента не доехали до пользователя, got %q", text)
+	}
+	if text == "Вот детали вашего заказа:" {
+		t.Error("пользователь получил подводку без данных")
+	}
+}
+
+// Обратная сторона: если модель ответила содержательнее агента, подменять
+// нечего — её ответ и остаётся.
+func TestLLMTurnKeepsItsOwnFullerAnswer(t *testing.T) {
+	s := startOuroborosStub(t, false)
+	s.reply = textOnlyReply
+	cfg := ouroborosCfg(s.URL)
+	cfg.Verbatim = false
+	reg := NewRegistry([]config.AgentConfig{cfg}, nil)
+	long := strings.Repeat("Развёрнутый ответ модели. ", 20)
+	url := serveExecutor(t,
+		NewOrchestratorExecutor(reg, stubRunner(t, "ask_ouroboros", long), nil),
+		OrchestratorCard)
+
+	probe := newA2UIClient(t, url)
+	parts := probe.sendText(t, "статус заказа ORD-001")
+
+	text := ""
+	for _, p := range parts {
+		if p != nil && !isA2UIPart(p) && p.Text() != "" {
+			text = p.Text()
+		}
+	}
+	if !strings.Contains(text, "Развёрнутый ответ модели") {
+		t.Errorf("ответ модели подменён напрасно, got %q", text)
+	}
+}
+
+// Виджет есть — подводка модели уместна, и подменять её нельзя: иначе рядом с
+// карточкой встанет её же текстовый пересказ.
+func TestPickAnswerKeepsLeadInWhenWidgetIsShown(t *testing.T) {
+	agentText := []string{"Очень длинный ответ агента, который никто не должен показать рядом с карточкой."}
+	got, swapped := pickAnswer("Вот детали:", agentText, true)
+	if swapped || got != "Вот детали:" {
+		t.Errorf("got %q swapped=%v", got, swapped)
 	}
 }

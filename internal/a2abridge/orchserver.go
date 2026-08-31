@@ -56,6 +56,7 @@ type orchExecutor struct {
 	widgets map[string][]map[string]any // sessionID → widgets produced this turn
 	a2uis   map[string][]map[string]any // sessionID → A2UI messages produced this turn
 	files   map[string][]attachedFile   // sessionID → files produced this turn
+	texts   map[string][]string         // sessionID → собственные ответы агентов за ход
 }
 
 // NewOrchestratorExecutor wraps the registry of remote agents as an A2A server
@@ -71,6 +72,7 @@ func NewOrchestratorExecutor(reg *Registry, build RunnerBuilder, trace *Tracer) 
 		widgets: make(map[string][]map[string]any),
 		a2uis:   make(map[string][]map[string]any),
 		files:   make(map[string][]attachedFile),
+		texts:   make(map[string][]string),
 	}
 	// Обработчики вешаются на КАЖДОГО клиента, включая созданных после правки
 	// конфига: разовый цикл по нынешним агентам оставил бы новых без них, и
@@ -89,6 +91,11 @@ func NewOrchestratorExecutor(reg *Registry, build RunnerBuilder, trace *Tracer) 
 		c.SetFileHandler(func(sessionID, filename, mediaType string, data []byte) {
 			e.mu.Lock()
 			e.files[sessionID] = append(e.files[sessionID], attachedFile{name: filename, mediaType: mediaType, data: data})
+			e.mu.Unlock()
+		})
+		c.SetTextHandler(func(sessionID, text string) {
+			e.mu.Lock()
+			e.texts[sessionID] = append(e.texts[sessionID], text)
 			e.mu.Unlock()
 		})
 	})
@@ -199,14 +206,38 @@ func (e *orchExecutor) nextTurn() int {
 }
 
 // drain takes everything collected for the session during this turn.
-func (e *orchExecutor) drain(sessionID string) ([]map[string]any, []map[string]any, []attachedFile) {
+func (e *orchExecutor) drain(sessionID string) ([]map[string]any, []map[string]any, []attachedFile, []string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	ws, msgs, fs := e.widgets[sessionID], e.a2uis[sessionID], e.files[sessionID]
+	ws, msgs, fs, ts := e.widgets[sessionID], e.a2uis[sessionID], e.files[sessionID], e.texts[sessionID]
 	delete(e.widgets, sessionID)
 	delete(e.a2uis, sessionID)
 	delete(e.files, sessionID)
-	return ws, msgs, fs
+	delete(e.texts, sessionID)
+	return ws, msgs, fs, ts
+}
+
+// pickAnswer выбирает, что показать пользователю за ход, отработанный локальной
+// моделью.
+//
+// Промпт оркестратора запрещает модели называть значения: их покажет карточка,
+// а модель может ошибиться. Для нашего воркера это верно всегда — он шлёт
+// виджет на каждый ответ. Для внешнего агента нет: он вправе прислать один
+// текст, и тогда от подводки «Вот детали вашего заказа:» пользователю нет
+// никакой пользы — данные остались только в ответе агента. То же на текстовом
+// режиме, где виджеты выбрасываются на нашей стороне.
+//
+// Поэтому: карточки не будет и ответ агента содержательнее подводки — в ленту
+// уходит он. Модель, ответившая развёрнуто сама, ничего не теряет.
+func pickAnswer(llmText string, agentTexts []string, visual bool) (string, bool) {
+	if visual {
+		return llmText, false
+	}
+	agent := strings.TrimSpace(strings.Join(agentTexts, "\n\n"))
+	if agent == "" || len(agent) <= len(strings.TrimSpace(llmText)) {
+		return llmText, false
+	}
+	return agent, true
 }
 
 // actionToText maps an A2UI button action name to the user text the orchestrator
@@ -393,7 +424,7 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 			// The resume may complete the task (receipt widget + file) or pause
 			// it again (the card form after "да") — both carry widgets, and a
 			// completion may carry files; emit them like a normal turn.
-			ws, msgs, fs := e.drain(sessionID)
+			ws, msgs, fs, _ := e.drain(sessionID)
 			emit(stripNeedsInput(result), ws, msgs, fs, "direct HITL resume")
 			return
 		}
@@ -452,7 +483,15 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 
 		// Drain unconditionally so text-only sessions don't leak map entries;
 		// only emit A2UI parts when the extension is active.
-		ws, msgs, fs := e.drain(sessionID)
+		ws, msgs, fs, agentTexts := e.drain(sessionID)
+		// Увидит ли пользователь карточку: в текстовом режиме собранные виджеты
+		// до него не доедут, и подводка модели останется единственным ответом.
+		visual := a2uiActive && (len(ws) > 0 || len(msgs) > 0)
+		if text, swapped := pickAnswer(finalText, agentTexts, visual); swapped {
+			e.trace.Logf("  карточки не будет, а подводка модели пуста по содержанию — в ленту уходит ответ агента (%d символов вместо %d)",
+				len([]rune(text)), len([]rune(strings.TrimSpace(finalText))))
+			finalText = text
+		}
 		emit(finalText, ws, msgs, fs, "llm turn")
 	}
 }
