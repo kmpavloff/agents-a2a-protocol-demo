@@ -3,6 +3,7 @@ package a2abridge
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -45,7 +46,11 @@ type Registry struct {
 	order   []string
 	remotes map[string]*Remote
 	clients map[string]*OrdersClient
-	probing map[string]bool // идущие фоновые проверки, чтобы не плодить их
+	probing map[string]bool               // идущие фоновые проверки, чтобы не плодить их
+	cfgs    map[string]config.AgentConfig // конфиг, по которому создан Remote
+
+	clientInit func(*OrdersClient) // навешивание обработчиков на нового клиента
+	gen        uint64              // поколение состава; растёт при каждом изменении
 }
 
 // NewRegistry создаёт реестр по конфигу. Соединения не открываются: каждый
@@ -56,10 +61,12 @@ func NewRegistry(agents []config.AgentConfig, trace *Tracer) *Registry {
 		remotes: make(map[string]*Remote, len(agents)),
 		clients: make(map[string]*OrdersClient, len(agents)),
 		probing: make(map[string]bool, len(agents)),
+		cfgs:    make(map[string]config.AgentConfig, len(agents)),
 	}
 	for _, cfg := range agents {
 		g.order = append(g.order, cfg.ID)
 		g.remotes[cfg.ID] = NewRemote(cfg, trace)
+		g.cfgs[cfg.ID] = cfg
 	}
 	return g
 }
@@ -103,6 +110,9 @@ func (g *Registry) ClientFor(id string) (*OrdersClient, bool) {
 	}
 	c := NewOrdersClientFromRemote(r)
 	g.clients[id] = c
+	if g.clientInit != nil {
+		g.clientInit(c)
+	}
 	return c, true
 }
 
@@ -238,4 +248,66 @@ func (g *Registry) List(_ context.Context) []AgentInfo {
 		})
 	}
 	return out
+}
+
+// SetClientInit задаёт подготовку клиента — навешивание обработчиков виджетов,
+// A2UI и файлов. Разовым циклом по IDs это делать нельзя: клиент, созданный
+// после правки конфига, остался бы без обработчиков, и виджеты нового агента
+// молча пропадали бы.
+func (g *Registry) SetClientInit(fn func(*OrdersClient)) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.clientInit = fn
+	// Клиенты, созданные до подписки, тоже должны быть подготовлены.
+	for _, c := range g.clients {
+		fn(c)
+	}
+}
+
+// Generation — номер состава агентов. Растёт при любом изменении списка;
+// исполнитель по нему понимает, что кэш runner'ов пора выбросить.
+func (g *Registry) Generation() uint64 {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.gen
+}
+
+// Apply приводит реестр к новому списку агентов.
+//
+// Сверка идёт по id: config.AgentConfig состоит только из строк и bool, так что
+// сравнение обычное. Нетронутый агент остаётся тем же *Remote — в нём живое
+// соединение, разобранная карточка и зависшие input-required задачи, и терять
+// их из-за правки соседа нельзя. Изменённый пересоздаётся целиком: cfg читается
+// без мьютекса (ID, Name, Verbatim), и править его на месте — гонка.
+func (g *Registry) Apply(agents []config.AgentConfig) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	order := make([]string, 0, len(agents))
+	remotes := make(map[string]*Remote, len(agents))
+	clients := make(map[string]*OrdersClient, len(agents))
+	cfgs := make(map[string]config.AgentConfig, len(agents))
+	changed := len(agents) != len(g.order)
+
+	for _, cfg := range agents {
+		order = append(order, cfg.ID)
+		cfgs[cfg.ID] = cfg
+		if old, ok := g.remotes[cfg.ID]; ok && g.cfgs[cfg.ID] == cfg {
+			remotes[cfg.ID] = old
+			if c, ok := g.clients[cfg.ID]; ok {
+				clients[cfg.ID] = c
+			}
+			continue
+		}
+		changed = true
+		g.trace.Logf("agent %q: конфиг изменился — пересоздаём соединение", cfg.ID)
+		remotes[cfg.ID] = NewRemote(cfg, g.trace)
+	}
+	if !changed && !slices.Equal(order, g.order) {
+		changed = true
+	}
+	g.order, g.remotes, g.clients, g.cfgs = order, remotes, clients, cfgs
+	if changed {
+		g.gen++
+	}
 }
