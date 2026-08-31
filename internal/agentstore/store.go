@@ -67,13 +67,21 @@ var (
 	ErrExists   = errors.New("agent already exists")
 )
 
+// Происхождение записи. Значения уезжают в JSON как есть, поэтому живут
+// константами: их читает и фронтенд, и HTTP-слой, выводящий из них право на
+// сброс.
+const (
+	SourceFile = "file" // только из orchestrator.yaml, overlay-записи нет
+	SourceUI   = "ui"   // есть overlay-запись, сделанная из интерфейса
+)
+
 // Record — запись для экрана настроек: действующий конфиг агента плюс
 // происхождение. Пароль сюда не попадает никогда — только признак, что он
 // задан.
 type Record struct {
 	config.AgentConfig
 	Hidden      bool
-	Source      string // "file" — только из YAML, "ui" — есть overlay-запись
+	Source      string // SourceFile или SourceUI
 	HasPassword bool
 	EnvLocked   []string // поля, перекрытые окружением: "url", "password"
 	// InFile — есть ли у агента версия в базовом (рукописном) списке. Source
@@ -153,9 +161,9 @@ func (s *Store) Records() []Record {
 	out := make([]Record, 0, len(s.base)+len(s.over))
 	seen := make(map[string]bool, len(s.over))
 	add := func(a config.AgentConfig, hidden, fromOverlay bool) {
-		source := "file"
+		source := SourceFile
 		if fromOverlay {
-			source = "ui"
+			source = SourceUI
 		}
 		r := Record{AgentConfig: a, Hidden: hidden, Source: source, InFile: s.inBase(a.ID)}
 		// Показываем действующее значение, а не то, что лежит в файле: адрес

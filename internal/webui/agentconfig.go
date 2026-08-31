@@ -25,10 +25,13 @@ type agentOut struct {
 	Hidden      bool     `json:"hidden"`
 	Source      string   `json:"source"`
 	EnvLocked   []string `json:"envLocked"`
-	// CanReset — есть ли у агента базовая версия из orchestrator.yaml, к
-	// которой имеет смысл вернуться. У агента, целиком заведённого через UI,
-	// такой версии нет: «сброс» для него означал бы безвозвратное удаление, а
-	// это дело кнопки «Удалить» с подтверждением, а не «Сбросить к конфигу».
+	// CanReset — есть ли что сбрасывать: базовая версия в orchestrator.yaml, к
+	// которой можно вернуться, И правка в overlay, которую для этого надо
+	// забыть. Оба условия нужны. У агента, целиком заведённого через UI, нет
+	// первого: «сброс» означал бы безвозвратное удаление, а это дело кнопки
+	// «Удалить» с подтверждением. У нетронутого агента из файла нет второго —
+	// он и так равен своей версии из конфига, и сброс вернул бы «нет такой
+	// записи», сообщение не по делу.
 	CanReset bool `json:"canReset"`
 }
 
@@ -80,7 +83,8 @@ func toOut(r agentstore.Record) agentOut {
 		Auth: authOut{
 			Type: r.Auth.Type, Username: r.Auth.Username, HasPassword: r.HasPassword,
 		},
-		Hidden: r.Hidden, Source: r.Source, EnvLocked: locked, CanReset: r.InFile,
+		Hidden: r.Hidden, Source: r.Source, EnvLocked: locked,
+		CanReset: r.InFile && r.Source == agentstore.SourceUI,
 	}
 }
 

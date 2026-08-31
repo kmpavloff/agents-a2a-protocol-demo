@@ -137,28 +137,53 @@ func TestDeleteAndResetAgent(t *testing.T) {
 
 // У агента, целиком заведённого через UI, нет базовой версии — форма не
 // должна предлагать «Сбросить к конфигу» для него.
-func TestCreatedAgentHasNoCanReset(t *testing.T) {
+// canReset означает «есть что сбрасывать», а не «есть базовая версия». Кнопка
+// «Сбросить к конфигу» под этим флагом обязана появляться ровно тогда, когда
+// нажатие сработает: у нетронутого агента из файла сбрасывать нечего, и Reset
+// ответил бы «нет такой записи» — сообщение не по делу.
+func TestCanResetOnlyWhenThereIsSomethingToReset(t *testing.T) {
+	byID := func(rec *httptest.ResponseRecorder) map[string]map[string]any {
+		t.Helper()
+		var out []map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("ответ не JSON: %s", rec.Body)
+		}
+		m := make(map[string]map[string]any, len(out))
+		for _, a := range out {
+			m[a["id"].(string)] = a
+		}
+		return m
+	}
+
 	mux, _ := newMux(t)
 	do(t, mux, http.MethodPost, "/api/agents/config", `{"id":"shop","url":"http://localhost:9100"}`)
-	rec := do(t, mux, http.MethodGet, "/api/agents/config", "")
-	var out []map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
-		t.Fatalf("ответ не JSON: %s", rec.Body)
+
+	agents := byID(do(t, mux, http.MethodGet, "/api/agents/config", ""))
+	if got := agents["orders"]["canReset"]; got != false {
+		t.Errorf("нетронутый агент из файла: canReset=%v, want false", got)
 	}
-	var shop map[string]any
-	for _, a := range out {
-		if a["id"] == "shop" {
-			shop = a
-		}
-		if a["id"] == "orders" && a["canReset"] != true {
-			t.Errorf("у файлового агента canReset должен быть true: %+v", a)
-		}
+	if got := agents["shop"]["canReset"]; got != false {
+		t.Errorf("агент, заведённый через UI: canReset=%v, want false", got)
 	}
-	if shop == nil {
-		t.Fatal("заведённый агент не найден в ответе")
+
+	// После правки у файлового агента появляется overlay-запись — вот её и
+	// забывает сброс.
+	if rec := do(t, mux, http.MethodPut, "/api/agents/config/orders",
+		`{"id":"orders","name":"Свой","url":"http://127.0.0.1:9000"}`); rec.Code != http.StatusOK {
+		t.Fatalf("PUT status: %d, body: %s", rec.Code, rec.Body)
 	}
-	if shop["canReset"] != false {
-		t.Errorf("у UI-агента canReset должен быть false: %+v", shop)
+	agents = byID(do(t, mux, http.MethodGet, "/api/agents/config", ""))
+	if got := agents["orders"]["canReset"]; got != true {
+		t.Errorf("изменённый агент из файла: canReset=%v, want true", got)
+	}
+
+	// И сброс по этому флагу действительно срабатывает, а не отвечает 404.
+	if rec := do(t, mux, http.MethodPost, "/api/agents/config/orders/reset", ""); rec.Code != http.StatusOK {
+		t.Fatalf("reset status: %d, body: %s", rec.Code, rec.Body)
+	}
+	agents = byID(do(t, mux, http.MethodGet, "/api/agents/config", ""))
+	if got := agents["orders"]["canReset"]; got != false {
+		t.Errorf("после сброса: canReset=%v, want false", got)
 	}
 }
 
