@@ -52,7 +52,7 @@ type orchExecutor struct {
 
 	mu      sync.Mutex
 	runners map[string]*runner.Runner   // agentId (или "auto") → runner
-	gen     uint64                      // поколение реестра, под которое собран кэш runner'ов
+	gen     atomic.Uint64               // поколение реестра, под которое собран кэш runner'ов
 	widgets map[string][]map[string]any // sessionID → widgets produced this turn
 	a2uis   map[string][]map[string]any // sessionID → A2UI messages produced this turn
 	files   map[string][]attachedFile   // sessionID → files produced this turn
@@ -92,7 +92,7 @@ func NewOrchestratorExecutor(reg *Registry, build RunnerBuilder, trace *Tracer) 
 			e.mu.Unlock()
 		})
 	})
-	e.gen = reg.Generation()
+	e.gen.Store(reg.Generation())
 	return e
 }
 
@@ -120,10 +120,13 @@ func (e *orchExecutor) selectAgent(msg *a2a.Message) string {
 func (e *orchExecutor) runnerFor(ctx context.Context, agentID string) (*runner.Runner, error) {
 	// Состав агентов мог измениться из UI. Кэш собран под прежний: в нём и
 	// старое описание в промпте, и инструмент удалённого агента.
-	if gen := e.reg.Generation(); gen != e.gen {
+	if gen := e.reg.Generation(); gen != e.gen.Load() {
 		e.mu.Lock()
-		clear(e.runners)
-		e.gen = gen
+		// Перепроверка под блокировкой: пока мы её брали, кэш мог уже почистить сосед.
+		if gen != e.gen.Load() {
+			clear(e.runners)
+			e.gen.Store(gen)
+		}
 		e.mu.Unlock()
 	}
 
