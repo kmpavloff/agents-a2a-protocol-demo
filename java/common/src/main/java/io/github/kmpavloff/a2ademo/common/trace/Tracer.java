@@ -101,19 +101,18 @@ public final class Tracer {
         String suffix = "";
         // Измеряем размер в UTF-8 байтах, обрезаем на границе символа если нужно.
         // Go обрезает точно в байте, что может расколоть многобайтовую последовательность.
-        // Здесь обрезаем в пределах символа — это надёжнее.
+        // Здесь обрезаем на границе UTF-8 последовательности: отступаем от бюджета,
+        // пока видим байты продолжения (форма 10xxxxxx), затем декодируем префикс.
         byte[] outBytes = out.getBytes(StandardCharsets.UTF_8);
         if (outBytes.length > MAX_DUMP_BYTES) {
-            // Найти наибольший префикс, укладывающийся в лимит
-            int charIndex = out.length();
-            while (charIndex > 0) {
-                byte[] prefixBytes = out.substring(0, charIndex).getBytes(StandardCharsets.UTF_8);
-                if (prefixBytes.length <= MAX_DUMP_BYTES) {
-                    out = out.substring(0, charIndex);
-                    break;
-                }
-                charIndex--;
+            int cut = MAX_DUMP_BYTES;
+            // Отступаем к началу UTF-8 последовательности: продолжающие байты имеют форму 10xxxxxx.
+            // Иначе на границе обреза оставался бы разрубленный символ — ровно та болячка,
+            // которая есть у Go, и повторять её незачем.
+            while (cut > 0 && (outBytes[cut] & 0xC0) == 0x80) {
+                cut--;
             }
+            out = new String(outBytes, 0, cut, StandardCharsets.UTF_8);
             suffix = System.lineSeparator() + "    … обрезано";
         }
         logf("⇄ %s:%n    %s%s", label, out.replace("\n", System.lineSeparator() + "    "), suffix);
