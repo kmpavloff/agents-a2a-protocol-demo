@@ -1,6 +1,7 @@
 package io.github.kmpavloff.a2ademo.common.config;
 
 import java.time.Duration;
+import java.util.Locale;
 import java.util.regex.Pattern;
 
 /**
@@ -61,7 +62,11 @@ public record AgentConfig(String id, String name, String url, String cardPath, S
      * @param field "URL" или "PASSWORD"
      */
     public static String envVar(String id, String field) {
-        return "A2A_AGENT_" + id.toUpperCase().replace('-', '_') + "_" + field;
+        // Locale.ROOT — иначе toUpperCase() зависит от локали JVM: под турецкой
+        // "i" становится "İ", и оркестратор перестаёт видеть свою же
+        // переменную окружения. Go тут locale-независим (strings.ToUpper), и
+        // это нужно повторить, а не разойтись с ним.
+        return "A2A_AGENT_" + id.toUpperCase(Locale.ROOT).replace('-', '_') + "_" + field;
     }
 
     /**

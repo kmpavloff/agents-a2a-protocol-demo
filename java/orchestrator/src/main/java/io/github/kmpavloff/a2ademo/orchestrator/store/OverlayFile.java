@@ -80,8 +80,15 @@ public final class OverlayFile {
             m.put("verbatim", a.verbatim());
             m.put("timeout", a.timeout());
             m.put("description", a.description());
-            m.put("auth", new LinkedHashMap<>(Map.of(
-                    "type", a.auth().type(), "username", a.auth().username(), "password", a.auth().password())));
+            // Явные put в порядке полей Go, а не Map.of(...): у Map.of порядок
+            // итерации SALT-рандомизирован, и файл переписывался бы в разном
+            // порядке ключей на каждый запуск JVM — не проблема для чтения (оба
+            // читателя ищут по ключу), но плохо для файла, который открывают руками.
+            Map<String, Object> auth = new LinkedHashMap<>();
+            auth.put("type", a.auth().type());
+            auth.put("username", a.auth().username());
+            auth.put("password", a.auth().password());
+            m.put("auth", auth);
             if (o.hidden()) {
                 m.put("hidden", true);
             }

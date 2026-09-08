@@ -10,6 +10,7 @@ import io.github.kmpavloff.a2ademo.common.config.AgentConfig;
 import io.github.kmpavloff.a2ademo.common.config.AuthConfig;
 import io.github.kmpavloff.a2ademo.common.rpc.JsonRpc;
 import io.github.kmpavloff.a2ademo.common.trace.Tracer;
+import io.github.kmpavloff.a2ademo.orchestrator.a2ui.A2ui;
 
 import java.io.IOException;
 import java.net.URI;
@@ -42,11 +43,6 @@ public class A2aClient {
         this.auth = auth;
         this.trace = trace;
         this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
-    }
-
-    /** Прежняя форма без конфига: анонимный агент по каноническому пути карточки. */
-    public static Resolved resolve(String baseUrl) {
-        return resolve(new AgentConfig("agent", "", baseUrl, "", "", false, "", "", AuthConfig.NONE), Tracer.noop());
     }
 
     /** Читает карточку по адресу и пути из конфига и строит клиента её JSONRPC-интерфейса. */
@@ -158,6 +154,16 @@ public class A2aClient {
     public SendResult sendMessage(A2aMessage message, List<String> extensions) {
         ObjectNode params = Json.MAPPER.createObjectNode();
         params.set("message", Json.MAPPER.valueToTree(message));
+        // Условие то же, что включает оба заголовка расширения ниже: этим
+        // полем клиент не договаривается о A2UI (триггер — заголовок и
+        // metadata.a2uiClientCapabilities, см. Remote.ask), но сторонний
+        // агент, который по нему решает, чем отвечать, должен увидеть от Java
+        // то же, что видит от Go.
+        if (extensions != null && !extensions.isEmpty()) {
+            ObjectNode configuration = Json.MAPPER.createObjectNode();
+            configuration.putArray("acceptedOutputModes").add("text/plain").add(A2ui.MIME_TYPE);
+            params.set("configuration", configuration);
+        }
 
         JsonRpc.Request rpc = new JsonRpc.Request();
         rpc.id = Json.MAPPER.getNodeFactory().numberNode(nextId.getAndIncrement());

@@ -1,5 +1,6 @@
 package io.github.kmpavloff.a2ademo.orchestrator.web;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.github.kmpavloff.a2ademo.common.Json;
 import io.github.kmpavloff.a2ademo.common.a2a.A2aMessage;
@@ -120,6 +121,12 @@ public class A2aWebController {
             return JsonRpc.Response.fail(req.id, JsonRpc.CODE_INVALID_REQUEST, "message is required");
         }
         A2aMessage message = Json.MAPPER.treeToValue(msgNode, A2aMessage.class);
+        // Дамп этой стороны — то, ради чего A2A_DEBUG вообще включают: без него
+        // видна только половина обмена (оркестратор↔агент из A2aClient), а
+        // разбираться приходится как раз с браузером↔оркестратор. Сериализуем
+        // тем же кодом, что уходит на провод, и молчим, когда дамп выключен —
+        // сборка JSON ради него самого недёшева.
+        dump("сообщение от клиента", message);
 
         // The orchestrator drives every task straight to a terminal state, so a
         // follow-up referencing a taskId has nothing to resume (parity with
@@ -141,7 +148,24 @@ public class A2aWebController {
         // расширения A2UI, и оттуда их читает референсный клиент.
         A2aMessage reply = A2aMessage.forTask(A2aMessage.ROLE_AGENT, task.id, task.contextId,
                 parts.toArray(new Part[0]));
+        dump("ответ клиенту", reply);
         task.status = TaskStatus.of(TaskState.COMPLETED, reply);
         return JsonRpc.Response.ok(req.id, Map.of("task", task));
+    }
+
+    /**
+     * Печатает сообщение целиком под A2A_DEBUG — тем же кодом, что кладёт его на
+     * провод (JSON-сериализация A2aMessage), а не пересказом полей. Порт
+     * orchExecutor.dump из orchserver.go.
+     */
+    private void dump(String label, A2aMessage message) {
+        if (!trace.debug() || message == null) {
+            return;
+        }
+        try {
+            trace.dump(label, Json.MAPPER.writeValueAsString(message));
+        } catch (JsonProcessingException e) {
+            trace.logf("  ⚠ не удалось сериализовать %s для дампа: %s", label, e.getMessage());
+        }
     }
 }

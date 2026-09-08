@@ -37,10 +37,21 @@ class RemoteTest {
     final Deque<String> results = new ArrayDeque<>();
     final List<JsonNode> seenRequests = new ArrayList<>();
     String extensions = "";
-    String cardCapabilities = "{}";
 
     @BeforeEach
     void setUp() throws IOException {
+        // По умолчанию — карточка без A2UI: большинство тестов проверяют ход
+        // разговора, а не негоциацию расширения, и им нужен просто рабочий агент.
+        startServer("{}");
+    }
+
+    /**
+     * Поднимает канонический сервер с заданными capabilities карточки.
+     * Параметром, а не полем {@code @BeforeEach}: единственный способ дать
+     * телу теста карточку, отличную от умолчания, — тело @BeforeEach уже
+     * отработало к моменту, когда тест мог бы поменять поле.
+     */
+    private void startServer(String cardCapabilities) throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         base = "http://127.0.0.1:" + server.getAddress().getPort();
         server.createContext("/.well-known/agent-card.json", ex -> respond(ex, """
@@ -176,6 +187,25 @@ class RemoteTest {
         results.push("{\"task\":{\"id\":\"t1\",\"status\":{\"state\":\"TASK_STATE_COMPLETED\"}}}");
         remote(cfg()).ask("s1", "привет", true);
         assertEquals("null", extensions, "карточка A2UI не объявляет — заголовка быть не должно");
+    }
+
+    // Обратная сторона предыдущего теста: карточка, объявившая расширение,
+    // должна получить и заголовок, и a2uiClientCapabilities в metadata —
+    // именно это Phase A и проверяет.
+    @Test
+    void requestsA2uiFromAnAgentThatDeclaresIt() throws IOException {
+        server.stop(0);
+        startServer("""
+                {"extensions":[{"uri":"%s"}]}""".formatted(A2ui.EXTENSION_URI));
+        results.push("{\"task\":{\"id\":\"t1\",\"status\":{\"state\":\"TASK_STATE_COMPLETED\"}}}");
+
+        remote(cfg()).ask("s1", "привет", true);
+
+        // Клиент шлёт оба URI разом (см. A2aClient.call): агенту, знающему
+        // только легаси-имя ревизии, тоже нужно узнать своё значение в списке.
+        assertTrue(extensions.contains(A2ui.EXTENSION_URI), "карточка объявляет A2UI — заголовок обязан уйти: " + extensions);
+        JsonNode meta = seenRequests.getFirst().path("params").path("message").path("metadata");
+        assertTrue(meta.has("a2uiClientCapabilities"), "capabilities обязаны попасть в metadata сообщения");
     }
 
     @Test

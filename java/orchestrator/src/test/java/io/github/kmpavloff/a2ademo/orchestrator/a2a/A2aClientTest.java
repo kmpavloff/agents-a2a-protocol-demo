@@ -30,6 +30,8 @@ class A2aClientTest {
     String base;
     final List<String> seenAuth = new ArrayList<>();
     final List<String> seenExtensions = new ArrayList<>();
+    final List<String> seenLegacyExtensions = new ArrayList<>();
+    final List<JsonNode> seenRequests = new ArrayList<>();
     String sendResult = "{\"task\":{\"id\":\"t1\",\"contextId\":\"c1\",\"status\":{\"state\":\"TASK_STATE_COMPLETED\"}}}";
 
     @BeforeEach
@@ -46,7 +48,12 @@ class A2aClientTest {
         server.createContext("/invoke", ex -> {
             seenAuth.add(String.valueOf(ex.getRequestHeaders().getFirst("Authorization")));
             seenExtensions.add(String.valueOf(ex.getRequestHeaders().getFirst("A2A-Extensions")));
+            // Легаси-имя — вся причина, по которой заголовок шлётся дважды: без
+            // записи здесь регрессия («шлём только A2A-Extensions») осталась бы
+            // незамеченной.
+            seenLegacyExtensions.add(String.valueOf(ex.getRequestHeaders().getFirst("X-A2A-Extensions")));
             JsonNode req = Json.MAPPER.readTree(ex.getRequestBody());
+            seenRequests.add(req);
             respond(ex, "{\"jsonrpc\":\"2.0\",\"id\":" + req.path("id") + ",\"result\":" + sendResult + "}");
         });
         server.start();
@@ -101,6 +108,28 @@ class A2aClientTest {
         assertEquals("Basic " + java.util.Base64.getEncoder().encodeToString("u:p".getBytes(StandardCharsets.UTF_8)),
                 seenAuth.getFirst());
         assertEquals("https://a2ui.org/x", seenExtensions.getFirst());
+        // Заголовок едет под обоими именами: A2A 1.0 знает A2A-Extensions,
+        // спека A2UI v0.9 — только легаси X-A2A-Extensions.
+        assertEquals("https://a2ui.org/x", seenLegacyExtensions.getFirst());
+    }
+
+    // acceptedOutputModes — не триггер A2UI (им остаются заголовок и
+    // a2uiClientCapabilities), но сторонний агент вправе на него смотреть, и
+    // Java обязана слать то же, что и Go.
+    @Test
+    void includesAcceptedOutputModesWhenExtensionsAreRequested() {
+        client().sendMessage(A2aMessage.of(A2aMessage.ROLE_USER, Part.text("привет")), List.of("https://a2ui.org/x"));
+        JsonNode configuration = seenRequests.getFirst().path("params").path("configuration");
+        assertTrue(configuration.isObject(), "configuration must be present when extensions are requested");
+        List<String> modes = new ArrayList<>();
+        configuration.path("acceptedOutputModes").forEach(n -> modes.add(n.asText()));
+        assertEquals(List.of("text/plain", "application/a2ui+json"), modes);
+    }
+
+    @Test
+    void omitsAcceptedOutputModesWhenNoExtensionsAreRequested() {
+        client().sendMessage(A2aMessage.of(A2aMessage.ROLE_USER, Part.text("привет")), null);
+        assertTrue(seenRequests.getFirst().path("params").path("configuration").isMissingNode());
     }
 
     // Агент кладёт объект задачи в result напрямую, без oneof-обёртки A2A 1.0.

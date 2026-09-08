@@ -130,6 +130,21 @@ class AgentsConfigTest {
         assertEquals("A2A_AGENT_MY_AGENT_PASSWORD", AgentConfig.envVar("my-agent", "PASSWORD"));
     }
 
+    // Под турецкой локалью toUpperCase() без Locale.ROOT превращает "i" в
+    // "İ" — тогда id "invoices" даёт не A2A_AGENT_INVOICES_URL, а имя с
+    // не-ASCII буквой, и Java с Go расходятся в том, какую переменную
+    // окружения читать. envVar обязан быть locale-независимым.
+    @Test
+    void envVarNameIsLocaleIndependent() {
+        java.util.Locale original = java.util.Locale.getDefault();
+        try {
+            java.util.Locale.setDefault(new java.util.Locale("tr", "TR"));
+            assertEquals("A2A_AGENT_INVOICES_URL", AgentConfig.envVar("invoices", "URL"));
+        } finally {
+            java.util.Locale.setDefault(original);
+        }
+    }
+
     @Test
     void parsesGoDurationSyntax() {
         assertEquals(Duration.ofSeconds(180), GoDuration.parse("180s"));
