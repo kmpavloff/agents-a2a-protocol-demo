@@ -1,5 +1,6 @@
 package io.github.kmpavloff.a2ademo.common.trace;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.io.Writer;
@@ -7,6 +8,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 
 /**
  * Line-oriented protocol tracer, mirroring the Go a2abridge.Tracer output:
@@ -15,16 +17,92 @@ import java.util.List;
 public final class Tracer {
     private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss");
 
+    /**
+     * Включает дамп полных тел A2A-обмена. Отдельная переменная, а не поле
+     * конфига: это инструмент разбирательства, который включают на один прогон.
+     */
+    public static final String DEBUG_ENV_VAR = "A2A_DEBUG";
+
+    /**
+     * Предел на одну запись. Разметка A2UI бывает под два десятка килобайт, и
+     * без предела один ход способен утопить весь лог.
+     */
+    private static final int MAX_DUMP_BYTES = 64 * 1024;
+
+    /**
+     * Последовательность из 13–19 цифр, возможно разбитая пробелами или
+     * дефисами. Маскируется везде, где текст попадает в лог.
+     */
+    private static final Pattern CARD_LIKE = Pattern.compile("\\b(?:\\d[ -]?){13,19}\\b");
+
+    private static final String CARD_MASK = "«номер карты скрыт»";
+
+    private static final ObjectMapper DUMP_MAPPER = new ObjectMapper();
+
     private final List<Object> sinks = new ArrayList<>(); // PrintStream or Writer
     private final String prefix;
+    private final boolean debug;
 
     public Tracer(String prefix, Object... sinks) {
+        this(prefix, debugEnabled(), sinks);
+    }
+
+    Tracer(String prefix, boolean debug, Object[] sinks) {
         this.prefix = prefix;
+        this.debug = debug;
         for (Object s : sinks) {
             if (s != null) {
                 this.sinks.add(s);
             }
         }
+    }
+
+    /** Прячет номера карт в произвольном тексте. */
+    public static String maskCardLike(String s) {
+        return s == null ? "" : CARD_LIKE.matcher(s).replaceAll(CARD_MASK);
+    }
+
+    /** Читает A2A_DEBUG. Пустое и «0»/«false» — выключено; любое иное значение включает. */
+    private static boolean debugEnabled() {
+        String v = System.getenv(DEBUG_ENV_VAR);
+        if (v == null || v.isBlank()) {
+            return false;
+        }
+        return !v.equalsIgnoreCase("0") && !v.equalsIgnoreCase("false");
+    }
+
+    /** Включён ли дамп тел. Нужен вызывающему, чтобы не собирать дорогой JSON впустую. */
+    public boolean debug() {
+        return debug;
+    }
+
+    /**
+     * Печатает тело A2A-обмена целиком: label — что это и в какую сторону.
+     * Молчит, когда debug выключен.
+     *
+     * <p>JSON переформатируется с отступами: читать однострочный ответ с
+     * разметкой A2UI невозможно, а ради этого дамп и включают. Неразбираемое
+     * тело печатается как есть — в разбирательстве важнее увидеть мусор, чем не
+     * увидеть ничего.
+     */
+    public void dump(String label, String body) {
+        if (!debug || body == null || body.isEmpty()) {
+            return;
+        }
+        String out = body;
+        try {
+            out = DUMP_MAPPER.writerWithDefaultPrettyPrinter()
+                    .writeValueAsString(DUMP_MAPPER.readTree(body));
+        } catch (Exception ignored) {
+            // тело не JSON — печатаем как есть
+        }
+        out = maskCardLike(out);
+        String suffix = "";
+        if (out.length() > MAX_DUMP_BYTES) {
+            out = out.substring(0, MAX_DUMP_BYTES);
+            suffix = System.lineSeparator() + "    … обрезано";
+        }
+        logf("⇄ %s:%n    %s%s", label, out.replace("\n", System.lineSeparator() + "    "), suffix);
     }
 
     public static Tracer noop() {
