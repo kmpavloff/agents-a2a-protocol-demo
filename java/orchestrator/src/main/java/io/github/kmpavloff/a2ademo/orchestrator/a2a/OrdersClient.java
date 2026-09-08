@@ -167,7 +167,7 @@ public class OrdersClient {
      * ("widget/..."), with the kind injected under "_kind"; null when absent.
      */
     @SuppressWarnings("unchecked")
-    static Map<String, Object> firstWidget(List<Part> parts) {
+    public static Map<String, Object> firstWidget(List<Part> parts) {
         if (parts == null) {
             return null;
         }

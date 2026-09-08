@@ -8,6 +8,8 @@ public final class TaskState {
     public static final String COMPLETED = "TASK_STATE_COMPLETED";
     public static final String CANCELED = "TASK_STATE_CANCELED";
     public static final String FAILED = "TASK_STATE_FAILED";
+    /** Агент отказался брать запрос в работу. В Go это отдельное терминальное состояние. */
+    public static final String REJECTED = "TASK_STATE_REJECTED";
 
     private TaskState() {}
 }
