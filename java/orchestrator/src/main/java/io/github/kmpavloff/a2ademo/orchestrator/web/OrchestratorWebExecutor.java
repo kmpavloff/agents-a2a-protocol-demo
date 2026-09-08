@@ -55,6 +55,9 @@ public class OrchestratorWebExecutor {
     /** Поколение реестра, под которое собран кэш агентов. */
     private final AtomicLong gen = new AtomicLong();
 
+    /** Охраняет инвалидацию кэша агентов: очистка и публикация поколения — одна атомарная операция. */
+    private final Object cacheLock = new Object();
+
     private final Map<String, List<Map<String, Object>>> widgets = new ConcurrentHashMap<>();
     private final Map<String, List<Map<String, Object>>> a2uis = new ConcurrentHashMap<>();
     private final Map<String, List<Remote.AttachedFile>> files = new ConcurrentHashMap<>();
@@ -236,8 +239,17 @@ public class OrchestratorWebExecutor {
         // Состав агентов мог измениться из UI. Кэш собран под прежний: в нём и
         // старое описание в промпте, и инструмент удалённого агента.
         long current = reg.generation();
-        if (current != gen.getAndSet(current)) {
-            agents.clear();
+        if (current != gen.get()) {
+            synchronized (cacheLock) {
+                // Перепроверка под блокировкой: пока мы её брали, кэш мог уже
+                // почистить сосед. Сначала чистим, потом публикуем поколение —
+                // иначе поток, увидевший новое значение, пройдёт мимо ветки
+                // инвалидации и достанет устаревшего агента из ещё не очищенного кэша.
+                if (current != gen.get()) {
+                    agents.clear();
+                    gen.set(current);
+                }
+            }
         }
 
         List<OrdersClient> tools;
