@@ -48,6 +48,21 @@ class RegistryTest {
         assertTrue(prepared[0], "новый клиент обязан пройти подготовку");
     }
 
+    // Клиент, созданный до подписки на clientInit, тоже обязан пройти
+    // подготовку — иначе виджеты уже работающего агента молча пропадали бы.
+    @Test
+    void setClientInitPreparesAlreadyExistingClients() {
+        Registry reg = new Registry(List.of(agent("orders", "http://a")), Tracer.noop());
+        OrdersClient existing = reg.clientFor("orders");
+        boolean[] prepared = {false};
+        reg.setClientInit(c -> {
+            if (c == existing) {
+                prepared[0] = true;
+            }
+        });
+        assertTrue(prepared[0], "уже созданный клиент обязан пройти подготовку задним числом");
+    }
+
     // Нетронутый агент остаётся тем же Remote: в нём живое соединение,
     // разобранная карточка и зависшие input-required задачи.
     @Test
@@ -70,6 +85,24 @@ class RegistryTest {
         long gen = reg.generation();
         reg.apply(List.of(agent("orders", "http://a")));
         assertEquals(gen, reg.generation());
+    }
+
+    // Порядок фиксирует пункты селектора UI и выбор агента для REPL, поэтому
+    // одна лишь перестановка обязана поднять поколение, а не только правка
+    // конфига отдельного агента.
+    @Test
+    void applyReorderBumpsGenerationAndKeepsRemotes() {
+        Registry reg = new Registry(List.of(agent("orders", "http://a"), agent("shop", "http://b")), Tracer.noop());
+        Remote orders = reg.get("orders").orElseThrow();
+        Remote shop = reg.get("shop").orElseThrow();
+        long gen = reg.generation();
+
+        reg.apply(List.of(agent("shop", "http://b"), agent("orders", "http://a")));
+
+        assertEquals(List.of("shop", "orders"), reg.ids());
+        assertTrue(reg.generation() > gen, "перестановка без изменения конфигов обязана поднять поколение");
+        assertSame(orders, reg.get("orders").orElseThrow(), "перестановка не меняет конфиг — Remote тот же");
+        assertSame(shop, reg.get("shop").orElseThrow(), "перестановка не меняет конфиг — Remote тот же");
     }
 
     @Test
