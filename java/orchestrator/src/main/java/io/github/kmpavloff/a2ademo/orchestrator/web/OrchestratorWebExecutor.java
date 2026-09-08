@@ -11,7 +11,6 @@ import io.github.kmpavloff.a2ademo.orchestrator.a2ui.A2ui;
 import io.github.kmpavloff.a2ademo.orchestrator.a2ui.A2uiParts;
 import io.github.kmpavloff.a2ademo.orchestrator.a2ui.Surfaces;
 import io.github.kmpavloff.a2ademo.orchestrator.agent.OrchestratorAgent;
-import io.github.kmpavloff.a2ademo.orchestrator.agent.SessionStore;
 
 import java.util.ArrayList;
 import java.util.Base64;
@@ -39,7 +38,6 @@ public class OrchestratorWebExecutor {
 
     private final Registry reg;
     private final AgentBuilder build;
-    private final SessionStore sessions;
     private final Tracer trace;
 
     /**
@@ -63,10 +61,9 @@ public class OrchestratorWebExecutor {
     private final Map<String, List<Remote.AttachedFile>> files = new ConcurrentHashMap<>();
     private final Map<String, List<String>> texts = new ConcurrentHashMap<>();
 
-    public OrchestratorWebExecutor(Registry reg, AgentBuilder build, SessionStore sessions, Tracer trace) {
+    public OrchestratorWebExecutor(Registry reg, AgentBuilder build, Tracer trace) {
         this.reg = reg;
         this.build = build;
-        this.sessions = sessions;
         this.trace = trace;
         // Обработчики вешаются на КАЖДОГО клиента, включая созданных после
         // правки конфига: разовый цикл оставил бы новых без них, и их виджеты

@@ -81,7 +81,7 @@ class WebE2eTest {
         SessionStore sessions = new SessionStore();
         OrchestratorWebExecutor executor = new OrchestratorWebExecutor(reg,
                 (tools, summary) -> new OrchestratorAgent(model, tools, summary, sessions),
-                sessions, Tracer.noop());
+                Tracer.noop());
         controller = new A2aWebController(executor, OrchestratorCards.agentCard("http://localhost:8080"), Tracer.noop());
     }
 
