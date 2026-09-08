@@ -141,7 +141,8 @@ public class AgentStore {
             envLocked.add("url");
         }
         boolean hasPassword = !a.auth().password().isEmpty();
-        if (System.getenv(AgentConfig.envVar(a.id(), "PASSWORD")) != null) {
+        String passEnv = System.getenv(AgentConfig.envVar(a.id(), "PASSWORD"));
+        if (passEnv != null && !passEnv.isBlank()) {
             hasPassword = true;
             envLocked.add("password");
         }
@@ -218,10 +219,12 @@ public class AgentStore {
             // показывает действующее (env-) значение, и если переносить его в
             // файл как есть, секрет из переменной осел бы открытым текстом на
             // диске, а адрес конкретного контейнера заморозился бы в конфиге.
-            if (a.auth().password().isEmpty() && System.getenv(AgentConfig.envVar(id, "PASSWORD")) == null) {
+            String passEnv = System.getenv(AgentConfig.envVar(id, "PASSWORD"));
+            if (a.auth().password().isEmpty() && (passEnv == null || passEnv.isBlank())) {
                 a = a.withPassword(currentPassword(id));
             }
-            if (System.getenv(AgentConfig.envVar(id, "URL")) != null) {
+            String urlEnv = System.getenv(AgentConfig.envVar(id, "URL"));
+            if (urlEnv != null && !urlEnv.isBlank()) {
                 a = a.withUrl(currentUrl(id));
             }
             List<AgentOverride> next = new ArrayList<>(over);
