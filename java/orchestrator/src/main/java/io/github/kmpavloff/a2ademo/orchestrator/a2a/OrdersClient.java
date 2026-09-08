@@ -82,7 +82,7 @@ public class OrdersClient {
 
         A2aClient.SendResult res;
         try {
-            res = client.sendMessage(msg);
+            res = client.sendMessage(msg, null);
         } catch (A2aClient.A2aException e) {
             trace.logf("    ✖ SendMessage failed: %s", e.getMessage());
             throw new A2aClient.A2aException("orders agent unreachable: " + e.getMessage(), e);
