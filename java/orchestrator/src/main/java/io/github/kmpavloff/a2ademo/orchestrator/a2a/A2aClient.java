@@ -13,6 +13,7 @@ import io.github.kmpavloff.a2ademo.common.trace.Tracer;
 
 import java.io.IOException;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -55,7 +56,17 @@ public class A2aClient {
         AgentCard card;
         try {
             HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
-            HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(base + cardPath))
+            // URI.create бросает непроверяемое IllegalArgumentException, которое
+            // соседний catch (IOException | InterruptedException) не поймает —
+            // заворачиваем сразу, чтобы вызывающий код видел A2aException, как и
+            // на любой другой сетевой сбой.
+            URI cardUri;
+            try {
+                cardUri = URI.create(base + cardPath);
+            } catch (IllegalArgumentException e) {
+                throw new A2aException("bad agent card URL " + base + cardPath + ": " + e.getMessage(), e);
+            }
+            HttpRequest.Builder b = HttpRequest.newBuilder(cardUri)
                     .timeout(Duration.ofSeconds(15))
                     .GET();
             authorize(b, cfg.auth());
@@ -95,23 +106,37 @@ public class A2aClient {
      * Рабочий адрес транспорта: схема и хост из конфига (по нему карточка и была
      * получена), путь из карточки. Так и нерабочий 0.0.0.0 внутри чужой карточки
      * не мешает, и объявленный агентом путь не теряется.
+     *
+     * <p>base и declared парсятся раздельно и по-разному откатываются: base —
+     * доверенный, из конфига, и его битость откатывает на declared; declared —
+     * из чужой карточки, ему доверять нельзя, и его битость откатывает на base.
      */
     static String mergeEndpoint(String base, String declared) {
+        URI b;
         try {
-            URI b = URI.create(base);
-            URI d = URI.create(declared);
-            String path = d.getPath();
-            if (path == null || path.isEmpty() || path.equals("/")) {
-                return base;
-            }
-            String basePath = b.getPath() == null ? "" : b.getPath();
-            if (basePath.endsWith("/")) {
-                basePath = basePath.substring(0, basePath.length() - 1);
-            }
+            b = URI.create(base);
+        } catch (IllegalArgumentException e) {
+            return declared;
+        }
+        URI d;
+        try {
+            d = URI.create(declared);
+        } catch (IllegalArgumentException e) {
+            return base;
+        }
+        String path = d.getPath();
+        if (path == null || path.isEmpty() || path.equals("/")) {
+            return base;
+        }
+        String basePath = b.getPath() == null ? "" : b.getPath();
+        if (basePath.endsWith("/")) {
+            basePath = basePath.substring(0, basePath.length() - 1);
+        }
+        try {
             return new URI(b.getScheme(), b.getAuthority(),
                     basePath + (path.startsWith("/") ? path : "/" + path), null, null).toString();
-        } catch (Exception e) {
-            return declared;
+        } catch (URISyntaxException e) {
+            return base;
         }
     }
 
@@ -200,7 +225,15 @@ public class A2aClient {
         String body;
         try {
             body = Json.MAPPER.writeValueAsString(rpc);
-            HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(invokeUrl))
+            // Тот же случай: битый invokeUrl (mergeEndpoint откатился, но и base
+            // может быть кривым) не должен всплывать как IllegalArgumentException.
+            URI uri;
+            try {
+                uri = URI.create(invokeUrl);
+            } catch (IllegalArgumentException e) {
+                throw new A2aException("bad agent URL " + invokeUrl + ": " + e.getMessage(), e);
+            }
+            HttpRequest.Builder b = HttpRequest.newBuilder(uri)
                     .header("Content-Type", "application/json")
                     .timeout(timeout)
                     .POST(HttpRequest.BodyPublishers.ofString(body));

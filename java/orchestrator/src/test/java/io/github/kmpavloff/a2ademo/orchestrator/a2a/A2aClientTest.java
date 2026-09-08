@@ -87,6 +87,14 @@ class A2aClientTest {
                 A2aClient.mergeEndpoint("http://127.0.0.1:9000", "http://0.0.0.0:18800/"));
     }
 
+    // Карточка чужая, ей нельзя доверять: если объявленный URL не парсится,
+    // остаёмся на адресе из конфига, а не на обломке из карточки.
+    @Test
+    void mergeEndpointFallsBackToConfigWhenTheDeclaredUrlIsMalformed() {
+        assertEquals("http://127.0.0.1:9000",
+                A2aClient.mergeEndpoint("http://127.0.0.1:9000", "http://0.0.0.0:18800/inv oke"));
+    }
+
     @Test
     void sendsBasicAuthAndTheExtensionHeader() {
         client().sendMessage(A2aMessage.of(A2aMessage.ROLE_USER, Part.text("привет")), List.of("https://a2ui.org/x"));
