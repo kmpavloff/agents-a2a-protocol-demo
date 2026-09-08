@@ -281,7 +281,8 @@ connection, and the flag is the only difference.
 
 The orchestrator is not limited to a single worker. `configs/orchestrator.yaml`
 takes a **list** of remote A2A agents, and in web mode a selector above the chat
-picks which one answers:
+picks which one answers. This mode is fully ported to the Java orchestrator too
+(see [java/README.md](java/README.md)).
 
 ```yaml
 agents:

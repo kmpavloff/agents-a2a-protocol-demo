@@ -30,12 +30,24 @@ What is ported:
   DataParts), maps incoming A2UI button actions back onto the conversation
   (`approve_refund`/`decline_refund` resume the pending worker task directly,
   bypassing the LLM), and serves the browser frontend.
-
-A second difference: the multi-agent support added to the Go orchestrator
-(a list of remote agents in the config plus the agent selector in the browser —
-see [«Several agents at once»](../README.md#several-agents-at-once)) is **not**
-ported here. The Java orchestrator still talks to exactly one worker via
-`worker_url`.
+- **multi-agent support** — the `agents:` list in `configs/orchestrator.yaml`
+  (`id`/`name`/`url`/`card_path`/`skill`/`verbatim`/`timeout`/`description`
+  plus HTTP Basic), the env overrides `A2A_AGENT_<ID>_URL` and
+  `A2A_AGENT_<ID>_PASSWORD`, the agent selector in the browser
+  (`GET /api/agents`), and `verbatim` mode, where the selected agent's reply
+  goes straight to the browser without the local model.
+- **Settings screen** — editing the agent list right from the browser, on top
+  of the overlay file `configs/agents.local.yaml` (`agents_overlay_path`,
+  `A2A_AGENTS_OVERLAY_PATH`); edits apply to the live registry without a
+  restart.
+- **A2UI v0.9.1** — both extension revisions are advertised and accepted, some
+  parts are tagged with `metadata.mimeType`, the payload travels as a message
+  array, and client events carry all five fields of the `client_to_server`
+  schema.
+- **third-party agent markup** — accepted and normalized to the basic catalog
+  (wrapped components, tables, a missing surface root).
+- **protocol dump** — `A2A_DEBUG=1` prints request and response bodies in
+  full, with the card number masked.
 
 One difference from Go: the jar does **not** embed the frontend build. At
 startup the web mode looks for it on disk — `$WEBUI_DIST`, then
