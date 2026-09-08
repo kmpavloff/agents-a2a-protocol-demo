@@ -52,17 +52,46 @@ public class A2aWebController {
     @PostMapping(value = "/invoke", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<JsonRpc.Response> invoke(
             @RequestBody String body,
-            @RequestHeader(value = "A2A-Extensions", required = false) List<String> extensions) {
-        boolean a2uiRequested = extensions != null && extensions.stream()
-                .flatMap(v -> java.util.Arrays.stream(v.split("[,\\s]+")))
-                .anyMatch(uri -> uri.equals(A2ui.EXTENSION_URI));
+            @RequestHeader(value = "A2A-Extensions", required = false) List<String> extensions,
+            @RequestHeader(value = "X-A2A-Extensions", required = false) List<String> legacyExtensions) {
+        // Заголовок приезжает под двумя именами: A2A 1.0 зовёт его
+        // A2A-Extensions, а спека A2UI v0.9 писалась под ранний A2A и знает
+        // только X-A2A-Extensions. Клиент шлёт оба — принимаем любой.
+        String activated = negotiate(extensions);
+        if (activated.isEmpty()) {
+            activated = negotiate(legacyExtensions);
+        }
 
-        JsonRpc.Response response = handle(body, a2uiRequested);
+        JsonRpc.Response response = handle(body, !activated.isEmpty());
         ResponseEntity.BodyBuilder builder = ResponseEntity.ok();
-        if (a2uiRequested && response.error == null) {
-            builder.header("A2A-Extensions", A2ui.EXTENSION_URI);
+        if (!activated.isEmpty() && response.error == null) {
+            // Эхом возвращается ИМЕННО запрошенный URI: клиент на 0.9 ждёт
+            // подтверждения под своим именем ревизии.
+            builder.header("A2A-Extensions", activated);
         }
         return builder.body(response);
+    }
+
+    /**
+     * Какой URI расширения A2UI запросил клиент, или "" — если ни одного.
+     * Значение заголовка бывает списком через запятую, поэтому оно ещё и
+     * разбивается.
+     */
+    static String negotiate(List<String> headerValues) {
+        if (headerValues == null) {
+            return "";
+        }
+        for (String value : headerValues) {
+            if (value == null) {
+                continue;
+            }
+            for (String uri : value.split("[,\\s]+")) {
+                if (uri.equals(A2ui.EXTENSION_URI) || uri.equals(A2ui.LEGACY_EXTENSION_URI)) {
+                    return uri;
+                }
+            }
+        }
+        return "";
     }
 
     private JsonRpc.Response handle(String body, boolean a2uiActive) {

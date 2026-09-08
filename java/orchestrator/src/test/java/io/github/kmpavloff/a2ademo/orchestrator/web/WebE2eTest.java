@@ -103,7 +103,7 @@ class WebE2eTest {
                  "messageId":"m-web","role":"ROLE_USER",%s"parts":[%s]}}}
                 """.formatted(ctx, partsJson);
         JsonRpc.Response resp = controller
-                .invoke(body, a2ui ? List.of(A2ui.EXTENSION_URI) : null)
+                .invoke(body, a2ui ? List.of(A2ui.EXTENSION_URI) : null, null)
                 .getBody();
         return Json.MAPPER.readTree(Json.MAPPER.writeValueAsString(resp));
     }
@@ -249,7 +249,7 @@ class WebE2eTest {
         var entity = controller.invoke("""
                 {"jsonrpc":"2.0","id":1,"method":"SendMessage","params":{"message":{
                  "messageId":"m-web","role":"ROLE_USER","parts":[{"text":"привет"}]}}}
-                """, List.of(A2ui.EXTENSION_URI));
+                """, List.of(A2ui.EXTENSION_URI), null);
         assertEquals(A2ui.EXTENSION_URI, entity.getHeaders().getFirst("A2A-Extensions"));
     }
 
