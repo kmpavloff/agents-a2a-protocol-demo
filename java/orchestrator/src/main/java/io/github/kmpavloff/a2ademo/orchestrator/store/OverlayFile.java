@@ -101,8 +101,13 @@ public final class OverlayFile {
             try {
                 // Пароли лежат открытым текстом, как и в orchestrator.yaml.
                 Files.setPosixFilePermissions(tmp, PosixFilePermissions.fromString("rw-------"));
-            } catch (UnsupportedOperationException | IOException ignored) {
+            } catch (UnsupportedOperationException ignored) {
                 // не POSIX-система — пропускаем
+            } catch (IOException e) {
+                // chmod реально не удался (ACL, квота, диск) — в отличие от
+                // отсутствия POSIX-прав, это не повод молча писать файл с
+                // паролями в открытом доступе.
+                throw new IllegalStateException("chmod temp overlay " + tmp + ": " + e.getMessage(), e);
             }
             Files.writeString(tmp, HEADER + body, StandardCharsets.UTF_8);
             Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
