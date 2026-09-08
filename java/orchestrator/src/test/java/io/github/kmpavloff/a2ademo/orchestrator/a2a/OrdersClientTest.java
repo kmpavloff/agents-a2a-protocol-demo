@@ -1,20 +1,12 @@
 package io.github.kmpavloff.a2ademo.orchestrator.a2a;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.sun.net.httpserver.HttpServer;
-import io.github.kmpavloff.a2ademo.common.Json;
+import io.github.kmpavloff.a2ademo.common.config.AgentConfig;
+import io.github.kmpavloff.a2ademo.common.config.AuthConfig;
 import io.github.kmpavloff.a2ademo.common.trace.Tracer;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
+import io.github.kmpavloff.a2ademo.orchestrator.a2ui.A2ui;
 import org.junit.jupiter.api.Test;
 
-import java.io.IOException;
-import java.io.OutputStream;
-import java.net.InetSocketAddress;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 
@@ -22,119 +14,69 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * OrdersClient against a canned A2A JSON-RPC server: verifies the outgoing
- * wire format (method, role, parts, task resume ids) and the input-required →
- * resume bookkeeping, mirroring the Go client tests.
+ * OrdersClient as a thin delegating tool: it must route every layer of a
+ * {@link Remote.Reply} to its handler and hand the model only the text — the
+ * protocol work behind that reply is Remote's, and is tested in RemoteTest.
  */
 class OrdersClientTest {
 
-    HttpServer server;
-    String baseUrl;
-    final Deque<String> cannedResults = new ArrayDeque<>();
-    final List<JsonNode> received = new ArrayList<>();
+    /** Remote.ask returns a canned reply instead of talking to the network. */
+    private static class StubRemote extends Remote {
+        private final Reply reply;
 
-    @BeforeEach
-    void startServer() throws IOException {
-        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        baseUrl = "http://127.0.0.1:" + server.getAddress().getPort();
-        server.createContext("/.well-known/agent-card.json", exchange -> {
-            String card = """
-                    {"name":"orders-agent","description":"Управляет заказами.","version":"0.1.0",
-                     "capabilities":{},"defaultInputModes":["text/plain"],"defaultOutputModes":["text/plain"],
-                     "supportedInterfaces":[{"url":"%s/invoke","protocolBinding":"JSONRPC","protocolVersion":"1.0"}],
-                     "skills":[{"id":"manage_orders","name":"Управление заказами","description":"Возвраты.","tags":["заказы"]}]}
-                    """.formatted(baseUrl);
-            respond(exchange, card);
-        });
-        server.createContext("/invoke", exchange -> {
-            JsonNode req = Json.MAPPER.readTree(exchange.getRequestBody());
-            synchronized (received) {
-                received.add(req);
-            }
-            String result = cannedResults.pop();
-            respond(exchange, "{\"jsonrpc\":\"2.0\",\"id\":" + req.path("id") + ",\"result\":" + result + "}");
-        });
-        server.start();
-    }
+        StubRemote(Reply reply) {
+            super(new AgentConfig("stub", "", "http://127.0.0.1:1", "", "", false, "", "", AuthConfig.NONE),
+                    Tracer.noop());
+            this.reply = reply;
+        }
 
-    private static void respond(com.sun.net.httpserver.HttpExchange exchange, String body) throws IOException {
-        byte[] b = body.getBytes(StandardCharsets.UTF_8);
-        exchange.getResponseHeaders().set("Content-Type", "application/json");
-        exchange.sendResponseHeaders(200, b.length);
-        try (OutputStream os = exchange.getResponseBody()) {
-            os.write(b);
+        @Override
+        public Reply ask(String sessionId, String text, boolean wantA2ui) {
+            return reply;
         }
     }
 
-    @AfterEach
-    void stopServer() {
-        server.stop(0);
-    }
-
-    private OrdersClient client() {
-        A2aClient.Resolved resolved = A2aClient.resolve(baseUrl);
-        return new OrdersClient(resolved.client(), WorkerProfile.fromCard(resolved.card()), Tracer.noop());
-    }
-
+    // Виджеты, разметка, файлы и собственный текст агента уходят в UI мимо
+    // модели; модели достаётся только текстовый результат инструмента.
     @Test
-    void resolveDerivesToolNameFromCard() {
-        assertEquals("ask_orders_agent", client().profile().toolName());
-    }
+    void forwardsEveryLayerToItsHandler() {
+        Remote remote = new StubRemote(new Remote.Reply(
+                "Заказ 1041 доставлен", false,
+                List.of(Map.of("version", A2ui.VERSION)),
+                List.of(Map.of("_kind", "widget/order")),
+                List.of(new Remote.AttachedFile("receipt.html", "text/html", new byte[]{1}))));
 
-    @Test
-    void completedTaskReturnsArtifactTextAndForwardsWidget() {
-        cannedResults.add("""
-                {"task":{"id":"t1","contextId":"c1","status":{"state":"TASK_STATE_COMPLETED"},
-                 "artifacts":[{"artifactId":"a1","parts":[{"text":"Вот детали вашего заказа:"},
-                   {"data":{"title":"Заказ 1041","order":{"id":"1041"}},"metadata":{"kind":"widget/order","version":1}}]}]}}
-                """);
-        OrdersClient c = client();
         List<Map<String, Object>> widgets = new ArrayList<>();
-        c.setWidgetHandler((session, w) -> widgets.add(w));
+        List<Map<String, Object>> a2ui = new ArrayList<>();
+        List<String> files = new ArrayList<>();
+        List<String> texts = new ArrayList<>();
 
-        String result = c.ask("s1", "статус заказа 1041");
-        assertEquals("Вот детали вашего заказа:", result);
+        OrdersClient c = new OrdersClient(remote, Tracer.noop());
+        c.setWidgetHandler((s, w) -> widgets.add(w));
+        c.setA2uiHandler((s, msgs) -> a2ui.addAll(msgs));
+        c.setFileHandler((s, name, mime, data) -> files.add(name));
+        c.setTextHandler((s, t) -> texts.add(t));
+
+        assertEquals("Заказ 1041 доставлен", c.ask("s1", "статус 1041", true));
         assertEquals(1, widgets.size());
-        assertEquals("widget/order", widgets.getFirst().get("_kind"));
-        assertEquals("", c.pendingTaskId("s1"), "no pending task after terminal state");
-
-        JsonNode sent = received.getFirst();
-        assertEquals("SendMessage", sent.path("method").asText());
-        JsonNode msg = sent.path("params").path("message");
-        assertEquals("ROLE_USER", msg.path("role").asText());
-        assertEquals("статус заказа 1041", msg.path("parts").get(0).path("text").asText());
-        assertTrue(msg.path("taskId").isMissingNode(), "new task must not reference a taskId");
+        assertEquals(1, a2ui.size());
+        assertEquals(List.of("receipt.html"), files);
+        assertEquals(List.of("Заказ 1041 доставлен"), texts);
     }
 
+    // Задачу, вставшую в input-required, модель обязана увидеть как вопрос.
     @Test
-    void inputRequiredStoresPendingAndResumesSameTask() {
-        cannedResults.add("""
-                {"task":{"id":"t9","contextId":"c9","status":{"state":"TASK_STATE_INPUT_REQUIRED",
-                 "message":{"messageId":"m1","role":"ROLE_AGENT","parts":[{"text":"Подтвердите возврат? (да/нет)"}]}}}}
-                """);
-        cannedResults.add("""
-                {"task":{"id":"t9","contextId":"c9","status":{"state":"TASK_STATE_COMPLETED"},
-                 "artifacts":[{"artifactId":"a1","parts":[{"text":"Возврат оформлен."}]}]}}
-                """);
-        OrdersClient c = client();
-
-        String first = c.ask("s1", "верни деньги за 1041");
-        assertEquals("NEEDS_USER_INPUT: Подтвердите возврат? (да/нет)", first);
-        assertEquals("t9", c.pendingTaskId("s1"));
-
-        String second = c.ask("s1", "да");
-        assertEquals("Возврат оформлен.", second);
-        assertEquals("", c.pendingTaskId("s1"));
-
-        JsonNode resume = received.get(1).path("params").path("message");
-        assertEquals("t9", resume.path("taskId").asText());
-        assertEquals("c9", resume.path("contextId").asText());
-        assertEquals("да", resume.path("parts").get(0).path("text").asText());
+    void marksAPendingAnswerForTheModel() {
+        Remote remote = new StubRemote(new Remote.Reply(
+                "Подтвердите возврат", true, List.of(), List.of(), List.of()));
+        assertEquals("NEEDS_USER_INPUT: Подтвердите возврат",
+                new OrdersClient(remote, Tracer.noop()).ask("s1", "верни 1041", false));
     }
 
     @Test
     void emptyMessageRepliesEscalateToStop() {
-        OrdersClient c = client();
+        OrdersClient c = new OrdersClient(
+                new StubRemote(new Remote.Reply("", false, List.of(), List.of(), List.of())), Tracer.noop());
         OrdersClient.EmptyReply first = c.emptyMessageReply("s1");
         assertTrue(!first.stop());
         OrdersClient.EmptyReply second = c.emptyMessageReply("s1");

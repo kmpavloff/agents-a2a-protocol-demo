@@ -5,6 +5,7 @@ import io.github.kmpavloff.a2ademo.common.llm.OpenAiChatModel;
 import io.github.kmpavloff.a2ademo.common.trace.Tracer;
 import io.github.kmpavloff.a2ademo.orchestrator.a2a.A2aClient;
 import io.github.kmpavloff.a2ademo.orchestrator.a2a.OrdersClient;
+import io.github.kmpavloff.a2ademo.orchestrator.a2a.Remote;
 import io.github.kmpavloff.a2ademo.orchestrator.a2a.WorkerProfile;
 import io.github.kmpavloff.a2ademo.orchestrator.agent.OrchestratorAgent;
 import io.github.kmpavloff.a2ademo.orchestrator.agent.SessionStore;
@@ -51,23 +52,21 @@ public class OrchestratorApplication {
         console.logf("A2A protocol trace → %s%s", cfg.a2aLogPath(), web ? " + stdout" : "");
 
         // Временно: клиент по-прежнему строится только на первом агенте списка.
-        // Полная разводка по всему списку agents — в задаче 12.
+        // Полная разводка по всему списку agents — в задаче 19.
         String workerUrl = cfg.agents().getFirst().url();
-        A2aClient.Resolved resolved;
+        Remote remote = new Remote(cfg.agents().getFirst(), trace);
         try {
-            resolved = A2aClient.resolve(workerUrl);
+            remote.connect();
         } catch (A2aClient.A2aException e) {
             console.logf("orders client (is the worker running at %s?): %s", workerUrl, e.getMessage());
             logFile.close();
             System.exit(1);
             return;
         }
-        trace.logf("resolved worker AgentCard \"%s\" at %s", resolved.card().name, workerUrl);
 
-        WorkerProfile profile = WorkerProfile.fromCard(resolved.card());
+        OrdersClient orders = new OrdersClient(remote, trace);
+        WorkerProfile profile = orders.profile();
         trace.logf("derived delegating tool \"%s\" from card", profile.toolName());
-
-        OrdersClient orders = new OrdersClient(resolved.client(), profile, trace);
         OpenAiChatModel model = new OpenAiChatModel(cfg.llm());
         console.logf("orchestrator | LLM=%s model=\"%s\" | worker=%s",
                 cfg.llm().baseUrl(), cfg.llm().model(), workerUrl);

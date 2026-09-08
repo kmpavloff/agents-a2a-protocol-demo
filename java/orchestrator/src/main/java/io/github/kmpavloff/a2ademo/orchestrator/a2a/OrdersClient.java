@@ -1,9 +1,6 @@
 package io.github.kmpavloff.a2ademo.orchestrator.a2a;
 
-import io.github.kmpavloff.a2ademo.common.a2a.A2aMessage;
-import io.github.kmpavloff.a2ademo.common.a2a.A2aTask;
 import io.github.kmpavloff.a2ademo.common.a2a.Part;
-import io.github.kmpavloff.a2ademo.common.a2a.TaskState;
 import io.github.kmpavloff.a2ademo.common.trace.Tracer;
 
 import java.util.LinkedHashMap;
@@ -13,10 +10,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiConsumer;
 
 /**
- * A2A client wrapper that delegates to the orders worker (port of
- * a2abridge/client.go): tracks pending input-required tasks per orchestrator
- * session so a follow-up user message resumes the exact same worker task, and
- * forwards widget DataParts to the UI, bypassing the LLM.
+ * Делегирующий инструмент поверх {@link Remote} (порт a2abridge/client.go):
+ * протокол, сессии и разбор ответа по слоям ведёт {@code Remote}, а этот класс
+ * — то, что видит модель, — раскладывает слои по обработчикам UI и отдаёт
+ * модели только текст.
  */
 public class OrdersClient {
 
@@ -26,30 +23,31 @@ public class OrdersClient {
      */
     public static final int EMPTY_CALL_LIMIT = 2;
 
-    private final A2aClient client;
-    private final WorkerProfile profile;
+    private final Remote remote;
     private final Tracer trace;
 
-    private final Map<String, Pending> pending = new ConcurrentHashMap<>();
     private final Map<String, Integer> emptyCalls = new ConcurrentHashMap<>();
     private volatile BiConsumer<String, Map<String, Object>> onWidget;
+    private volatile BiConsumer<String, List<Map<String, Object>>> onA2ui;
     private volatile FileHandler onFile;
-
-    private record Pending(String taskId, String contextId) {}
+    private volatile BiConsumer<String, String> onText;
 
     /** Receives downloadable files (raw parts) the worker attaches to artifacts. */
     public interface FileHandler {
         void accept(String sessionId, String filename, String mediaType, byte[] data);
     }
 
-    public OrdersClient(A2aClient client, WorkerProfile profile, Tracer trace) {
-        this.client = client;
-        this.profile = profile;
+    public OrdersClient(Remote remote, Tracer trace) {
+        this.remote = remote;
         this.trace = trace;
     }
 
+    public Remote remote() {
+        return remote;
+    }
+
     public WorkerProfile profile() {
-        return profile;
+        return remote.profile();
     }
 
     /** Registers a callback for widgets (DataParts) the worker emits. */
@@ -62,61 +60,55 @@ public class OrdersClient {
         this.onFile = handler;
     }
 
+    /** Разметка, которую агент написал сам (в отличие от виджетов, что мапит шлюз). */
+    public void setA2uiHandler(BiConsumer<String, List<Map<String, Object>>> handler) {
+        this.onA2ui = handler;
+    }
+
     /**
-     * Sends text to the orders worker, resuming a pending input-required task
-     * when one exists for the session, and returns the agent's response text.
+     * Собственный текст ответа агента. Не для показа: он уходит модели как
+     * результат инструмента и обычно ей же и пересказывается. Нужен как запас на
+     * ход, в котором карточки не окажется, — тогда данные есть только здесь.
      */
-    public String ask(String sessionId, String text) {
-        trace.logf("──▶ orchestrator delegating to orders worker | session=%s", sessionId);
+    public void setTextHandler(BiConsumer<String, String> handler) {
+        this.onText = handler;
+    }
 
-        A2aMessage msg;
-        Pending p = pending.get(sessionId);
-        if (p != null) {
-            trace.logf("    resuming input-required task | taskID=%s contextID=%s", p.taskId(), p.contextId());
-            msg = A2aMessage.forTask(A2aMessage.ROLE_USER, p.taskId(), p.contextId(), Part.text(text));
-        } else {
-            trace.logf("    starting new task (no pending task for session)");
-            msg = A2aMessage.of(A2aMessage.ROLE_USER, Part.text(text));
-        }
-        trace.logf("    SendMessage role=user text=\"%s\"", text);
+    /**
+     * Шлёт текст удалённому агенту и возвращает то, что увидит модель. Виджеты,
+     * разметка и файлы уходят в UI мимо неё.
+     */
+    public String ask(String sessionId, String text, boolean wantA2ui) {
+        Remote.Reply reply = remote.ask(sessionId, text, wantA2ui);
+        forward(sessionId, reply);
+        return reply.needsInput() ? "NEEDS_USER_INPUT: " + reply.text() : reply.text();
+    }
 
-        A2aClient.SendResult res;
-        try {
-            res = client.sendMessage(msg, null);
-        } catch (A2aClient.A2aException e) {
-            trace.logf("    ✖ SendMessage failed: %s", e.getMessage());
-            throw new A2aClient.A2aException("orders agent unreachable: " + e.getMessage(), e);
-        }
-
-        if (res.message() != null) {
-            trace.logf("◀── response: Message (synchronous, no task) | parts=%d",
-                    res.message().parts == null ? 0 : res.message().parts.size());
-            pending.remove(sessionId);
-            String result = res.message().firstText();
-            if (result.isEmpty()) {
-                result = "Готово.";
+    /** Раскладывает слои ответа по зарегистрированным обработчикам. */
+    private void forward(String sessionId, Remote.Reply reply) {
+        BiConsumer<String, Map<String, Object>> widget = onWidget;
+        if (widget != null) {
+            for (Map<String, Object> w : reply.widgets()) {
+                trace.logf("    ⟐ widget DataPart (%s) → UI, bypassing LLM", w.get("_kind"));
+                widget.accept(sessionId, w);
             }
-            trace.logf("    ✔ result=\"%s\"", result);
-            return result;
         }
-
-        A2aTask task = res.task();
-        trace.logf("◀── response: Task | id=%s contextID=%s state=%s", task.id, task.contextId,
-                task.status == null ? "?" : task.status.state);
-        if (task.status != null && TaskState.INPUT_REQUIRED.equals(task.status.state)) {
-            pending.put(sessionId, new Pending(task.id, task.contextId));
-            forwardWidget(sessionId, statusParts(task)); // e.g. confirmation widget
-            String question = statusMessageText(task);
-            trace.logf("    ⏸ input-required — stored pending task, asking user: \"%s\"", question);
-            return "NEEDS_USER_INPUT: " + question;
+        BiConsumer<String, List<Map<String, Object>>> a2ui = onA2ui;
+        if (a2ui != null && !reply.a2ui().isEmpty()) {
+            trace.logf("    ⟐ %d A2UI message(s) from the agent → UI", reply.a2ui().size());
+            a2ui.accept(sessionId, reply.a2ui());
         }
-
-        pending.remove(sessionId);
-        forwardWidget(sessionId, artifactParts(task)); // e.g. order / order-list widget
-        forwardFiles(sessionId, artifactParts(task));  // e.g. the refund receipt
-        String result = taskResultText(task);
-        trace.logf("    ✔ terminal state, cleared pending | result=\"%s\"", result);
-        return result;
+        FileHandler file = onFile;
+        if (file != null) {
+            for (Remote.AttachedFile f : reply.files()) {
+                trace.logf("    ⟐ file part \"%s\" (%s, %d bytes) → UI", f.name(), f.mediaType(), f.data().length);
+                file.accept(sessionId, f.name(), f.mediaType(), f.data());
+            }
+        }
+        BiConsumer<String, String> textHandler = onText;
+        if (textHandler != null && !reply.text().isBlank()) {
+            textHandler.accept(sessionId, reply.text());
+        }
     }
 
     /**
@@ -146,20 +138,7 @@ public class OrdersClient {
 
     /** A2A task id pending for the session, or "" — used by the web executor and tests. */
     public String pendingTaskId(String sessionId) {
-        Pending p = pending.get(sessionId);
-        return p == null ? "" : p.taskId();
-    }
-
-    private void forwardWidget(String sessionId, List<Part> parts) {
-        BiConsumer<String, Map<String, Object>> handler = onWidget;
-        if (handler == null) {
-            return;
-        }
-        Map<String, Object> w = firstWidget(parts);
-        if (w != null) {
-            trace.logf("    ⟐ widget DataPart (%s) → UI, bypassing LLM", w.get("_kind"));
-            handler.accept(sessionId, w);
-        }
+        return remote.pendingTaskId(sessionId);
     }
 
     /**
@@ -188,66 +167,5 @@ public class OrdersClient {
             return out;
         }
         return null;
-    }
-
-    /** Forwards every downloadable raw part (with a filename) to the file handler. */
-    private void forwardFiles(String sessionId, List<Part> parts) {
-        FileHandler handler = onFile;
-        if (handler == null || parts == null) {
-            return;
-        }
-        for (Part p : parts) {
-            if (p == null || p.filename == null || p.filename.isEmpty() || p.raw == null) {
-                continue;
-            }
-            byte[] data;
-            try {
-                data = java.util.Base64.getDecoder().decode(p.raw);
-            } catch (IllegalArgumentException e) {
-                continue;
-            }
-            trace.logf("    ⟐ file part \"%s\" (%s, %d bytes) → UI", p.filename, p.mediaType, data.length);
-            handler.accept(sessionId, p.filename, p.mediaType, data);
-        }
-    }
-
-    private static List<Part> statusParts(A2aTask t) {
-        return t.status == null || t.status.message == null ? null : t.status.message.parts;
-    }
-
-    private static List<Part> artifactParts(A2aTask t) {
-        return t.artifacts == null || t.artifacts.isEmpty() ? null : t.artifacts.getLast().parts;
-    }
-
-    static String statusMessageText(A2aTask t) {
-        if (t.status != null && t.status.message != null && t.status.message.parts != null
-                && !t.status.message.parts.isEmpty()) {
-            return t.status.message.parts.getFirst().textOrEmpty();
-        }
-        return "Агенту по заказам нужны дополнительные данные.";
-    }
-
-    /**
-     * Last artifact text of a completed task, falling back to the last history
-     * message text, then "Готово." — empty text parts are skipped.
-     */
-    static String taskResultText(A2aTask t) {
-        if (t.artifacts != null && !t.artifacts.isEmpty()) {
-            for (Part p : t.artifacts.getLast().parts) {
-                String txt = p.textOrEmpty();
-                if (!txt.isEmpty()) {
-                    return txt;
-                }
-            }
-        }
-        if (t.history != null && !t.history.isEmpty()) {
-            for (Part p : t.history.getLast().parts) {
-                String txt = p.textOrEmpty();
-                if (!txt.isEmpty()) {
-                    return txt;
-                }
-            }
-        }
-        return "Готово.";
     }
 }

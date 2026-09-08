@@ -3,15 +3,16 @@ package io.github.kmpavloff.a2ademo.orchestrator.web;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.sun.net.httpserver.HttpServer;
 import io.github.kmpavloff.a2ademo.common.Json;
+import io.github.kmpavloff.a2ademo.common.config.AgentConfig;
+import io.github.kmpavloff.a2ademo.common.config.AuthConfig;
 import io.github.kmpavloff.a2ademo.common.llm.ChatMessage;
 import io.github.kmpavloff.a2ademo.common.llm.ChatModel;
 import io.github.kmpavloff.a2ademo.common.llm.ToolCall;
 import io.github.kmpavloff.a2ademo.common.llm.ToolSpec;
 import io.github.kmpavloff.a2ademo.common.rpc.JsonRpc;
 import io.github.kmpavloff.a2ademo.common.trace.Tracer;
-import io.github.kmpavloff.a2ademo.orchestrator.a2a.A2aClient;
 import io.github.kmpavloff.a2ademo.orchestrator.a2a.OrdersClient;
-import io.github.kmpavloff.a2ademo.orchestrator.a2a.WorkerProfile;
+import io.github.kmpavloff.a2ademo.orchestrator.a2a.Remote;
 import io.github.kmpavloff.a2ademo.orchestrator.a2ui.A2ui;
 import io.github.kmpavloff.a2ademo.orchestrator.agent.OrchestratorAgent;
 import io.github.kmpavloff.a2ademo.orchestrator.agent.SessionStore;
@@ -75,8 +76,10 @@ class WebE2eTest {
         });
         worker.start();
 
-        A2aClient.Resolved resolved = A2aClient.resolve(base);
-        OrdersClient orders = new OrdersClient(resolved.client(), WorkerProfile.fromCard(resolved.card()), Tracer.noop());
+        Remote remote = new Remote(
+                new AgentConfig("orders", "", base, "", "", false, "", "", AuthConfig.NONE), Tracer.noop());
+        remote.connect(); // eager, как в OrchestratorApplication: профиль нужен сразу для toolSpecs
+        OrdersClient orders = new OrdersClient(remote, Tracer.noop());
         model = new StubModel();
         OrchestratorAgent agent = new OrchestratorAgent(model, List.of(orders), orders.profile().summary(), new SessionStore());
         OrchestratorWebExecutor executor = new OrchestratorWebExecutor(agent, orders, Tracer.noop());

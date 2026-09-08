@@ -132,7 +132,9 @@ public class OrchestratorAgent {
                 stop = er.stop();
             } else {
                 target.clearEmpty(sessionId);
-                result = target.ask(sessionId, message);
+                // TODO(задача 13): true — временная заглушка, пока per-turn режим
+                // (виджеты/только текст) не протянут через runTurn до сюда.
+                result = target.ask(sessionId, message, true);
             }
             history.add(ChatMessage.assistantToolCall(call));
             history.add(ChatMessage.tool(call.id(), result));

@@ -109,7 +109,7 @@ public class OrchestratorWebExecutor {
         if (directResume && !orders.pendingTaskId(sessionId).isEmpty()) {
             trace.logf("  confirmation button \"%s\" → resuming worker directly with \"%s\" (LLM bypassed)",
                     actionName, safeActionEcho(actionName, userText));
-            String result = orders.ask(sessionId, userText);
+            String result = orders.ask(sessionId, userText, a2uiActive);
             // The resume may complete (receipt widget + file) or pause again
             // (the card form after "да") — emit widgets/files like a normal turn.
             List<Part> parts = new ArrayList<>();
