@@ -26,7 +26,7 @@ class A2uiTest {
                         Map.of("id", "decline", "label", "Отмена"))));
         assertNotNull(msgs, "confirmation widget should map");
         assertEquals(2, msgs.size(), "want createSurface + updateComponents");
-        assertEquals("v0.9", msgs.get(0).get("version"));
+        assertEquals(A2ui.VERSION, msgs.get(0).get("version"));
         assertNotNull(msgs.get(0).get("createSurface"));
 
         Map<String, Object> uc = (Map<String, Object>) msgs.get(1).get("updateComponents");
@@ -102,7 +102,7 @@ class A2uiTest {
     @Test
     void parseAction() {
         A2ui.Action a = A2ui.parseAction(Map.of(
-                "version", "v0.9",
+                "version", A2ui.VERSION,
                 "action", Map.of("name", "approve_refund", "context", Map.of("order_id", "1055"))));
         assertNotNull(a);
         assertEquals("approve_refund", a.name());
