@@ -123,11 +123,11 @@ class WebE2eTest {
         JsonNode task = invoke("{\"text\":\"статус заказа 1041\"}", null, true).path("result").path("task");
         assertEquals("TASK_STATE_COMPLETED", task.path("status").path("state").asText());
         JsonNode parts = task.path("artifacts").get(0).path("parts");
-        assertEquals(3, parts.size(), "text + createSurface + updateComponents: " + parts);
+        assertEquals(2, parts.size(), "text + one A2UI part carrying createSurface and updateComponents as an array: " + parts);
         assertEquals("Вот детали вашего заказа:", parts.get(0).path("text").asText());
         assertEquals("application/a2ui+json", parts.get(1).path("mediaType").asText());
-        assertTrue(parts.get(1).path("data").has("createSurface"));
-        assertTrue(parts.get(2).path("data").has("updateComponents"));
+        assertTrue(parts.get(1).path("data").get(0).has("createSurface"));
+        assertTrue(parts.get(1).path("data").get(1).has("updateComponents"));
     }
 
     @Test
@@ -220,7 +220,7 @@ class WebE2eTest {
         JsonNode task1 = invoke("{\"text\":\"верни деньги за 1041\"}", null, true).path("result").path("task");
         String contextId = task1.path("contextId").asText();
         JsonNode parts1 = task1.path("artifacts").get(0).path("parts");
-        assertTrue(parts1.size() >= 3, "confirmation widget must ride as A2UI parts: " + parts1);
+        assertTrue(parts1.size() >= 2, "confirmation widget must ride as an A2UI part: " + parts1);
 
         // Turn 2: the approve button. The stub LLM script is EMPTY — a model
         // call would throw — proving the resume bypasses the LLM.

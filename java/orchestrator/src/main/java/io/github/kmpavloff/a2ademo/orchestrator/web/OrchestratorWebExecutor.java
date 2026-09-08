@@ -6,6 +6,7 @@ import io.github.kmpavloff.a2ademo.common.trace.Tracer;
 import io.github.kmpavloff.a2ademo.common.util.Cards;
 import io.github.kmpavloff.a2ademo.orchestrator.a2a.OrdersClient;
 import io.github.kmpavloff.a2ademo.orchestrator.a2ui.A2ui;
+import io.github.kmpavloff.a2ademo.orchestrator.a2ui.A2uiParts;
 import io.github.kmpavloff.a2ademo.orchestrator.agent.OrchestratorAgent;
 
 import java.util.ArrayList;
@@ -167,11 +168,7 @@ public class OrchestratorWebExecutor {
                 continue;
             }
             trace.logf("  A2UI: widget %s → %d message(s) (%s)", w.get("_kind"), msgs.size(), A2ui.MIME_TYPE);
-            for (Map<String, Object> m : msgs) {
-                Part part = Part.data(m, null);
-                part.mediaType = A2ui.MIME_TYPE;
-                parts.add(part);
-            }
+            parts.add(A2uiParts.message(msgs));
         }
         return parts;
     }
