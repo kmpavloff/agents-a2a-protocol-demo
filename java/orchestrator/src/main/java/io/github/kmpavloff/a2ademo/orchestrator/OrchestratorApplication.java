@@ -10,6 +10,7 @@ import io.github.kmpavloff.a2ademo.orchestrator.a2a.Remote;
 import io.github.kmpavloff.a2ademo.orchestrator.a2a.WorkerProfile;
 import io.github.kmpavloff.a2ademo.orchestrator.agent.OrchestratorAgent;
 import io.github.kmpavloff.a2ademo.orchestrator.agent.SessionStore;
+import io.github.kmpavloff.a2ademo.orchestrator.store.AgentStore;
 import io.github.kmpavloff.a2ademo.orchestrator.tui.Repl;
 import io.github.kmpavloff.a2ademo.orchestrator.web.OrchestratorCards;
 import io.github.kmpavloff.a2ademo.orchestrator.web.OrchestratorWebExecutor;
@@ -18,6 +19,7 @@ import org.springframework.boot.SpringApplication;
 
 import java.io.FileWriter;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
@@ -81,13 +83,18 @@ public class OrchestratorApplication {
             // Тот же временный однагентный реестр, что и remote/orders выше: полная
             // разводка по всему списку agents — в задаче 19.
             Registry registry = new Registry(List.of(cfg.agents().getFirst()), trace);
+            // Хранилище для экрана настроек уже видит весь список agents (сам
+            // список редактировать можно), но не подписано на onChange: правки
+            // из UI не долетают до живого реестра — эта разводка тоже в задаче 19.
+            AgentStore agentStore = new AgentStore(cfg.agents(), Path.of(cfg.agentsOverlayPath()));
             WebApplication.configure(
                     new OrchestratorWebExecutor(registry,
                             (tools, summary) -> new OrchestratorAgent(model, tools, summary, sessions),
                             sessions, trace),
                     OrchestratorCards.agentCard(cfg.publicUrl()),
                     trace,
-                    registry);
+                    registry,
+                    agentStore);
             SpringApplication app = new SpringApplication(WebApplication.class);
             app.setDefaultProperties(Map.of(
                     "server.port", cfg.port(),
