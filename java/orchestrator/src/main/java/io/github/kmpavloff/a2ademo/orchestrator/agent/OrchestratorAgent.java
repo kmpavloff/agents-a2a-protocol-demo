@@ -84,8 +84,13 @@ public class OrchestratorAgent {
         return String.format(INSTRUCTION_TEMPLATE, toolNames, summary);
     }
 
-    /** Runs one user turn and returns the assistant's final text. */
-    public String runTurn(String sessionId, String userText, TurnListener listener) {
+    /**
+     * Runs one user turn and returns the assistant's final text.
+     *
+     * @param a2uiActive режим ходом: активно ли расширение A2UI у клиента —
+     *                   решает, просить ли делегируемого агента о разметке
+     */
+    public String runTurn(String sessionId, String userText, TurnListener listener, boolean a2uiActive) {
         List<ChatMessage> history = sessions.history(sessionId);
         history.add(ChatMessage.user(userText));
 
@@ -132,9 +137,7 @@ public class OrchestratorAgent {
                 stop = er.stop();
             } else {
                 target.clearEmpty(sessionId);
-                // TODO(задача 13): true — временная заглушка, пока per-turn режим
-                // (виджеты/только текст) не протянут через runTurn до сюда.
-                result = target.ask(sessionId, message, true);
+                result = target.ask(sessionId, message, a2uiActive);
             }
             history.add(ChatMessage.assistantToolCall(call));
             history.add(ChatMessage.tool(call.id(), result));

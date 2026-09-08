@@ -5,6 +5,7 @@ import io.github.kmpavloff.a2ademo.common.llm.OpenAiChatModel;
 import io.github.kmpavloff.a2ademo.common.trace.Tracer;
 import io.github.kmpavloff.a2ademo.orchestrator.a2a.A2aClient;
 import io.github.kmpavloff.a2ademo.orchestrator.a2a.OrdersClient;
+import io.github.kmpavloff.a2ademo.orchestrator.a2a.Registry;
 import io.github.kmpavloff.a2ademo.orchestrator.a2a.Remote;
 import io.github.kmpavloff.a2ademo.orchestrator.a2a.WorkerProfile;
 import io.github.kmpavloff.a2ademo.orchestrator.agent.OrchestratorAgent;
@@ -73,11 +74,17 @@ public class OrchestratorApplication {
         console.logf("orchestrator tools (1):");
         console.logf("  - %s: %s", profile.toolName(), profile.toolDesc());
 
-        OrchestratorAgent agent = new OrchestratorAgent(model, List.of(orders), orders.profile().summary(), new SessionStore());
+        SessionStore sessions = new SessionStore();
+        OrchestratorAgent agent = new OrchestratorAgent(model, List.of(orders), orders.profile().summary(), sessions);
 
         if (web) {
+            // Тот же временный однагентный реестр, что и remote/orders выше: полная
+            // разводка по всему списку agents — в задаче 19.
+            Registry registry = new Registry(List.of(cfg.agents().getFirst()), trace);
             WebApplication.configure(
-                    new OrchestratorWebExecutor(agent, orders, trace),
+                    new OrchestratorWebExecutor(registry,
+                            (tools, summary) -> new OrchestratorAgent(model, tools, summary, sessions),
+                            sessions, trace),
                     OrchestratorCards.agentCard(cfg.publicUrl()),
                     trace);
             SpringApplication app = new SpringApplication(WebApplication.class);

@@ -11,8 +11,7 @@ import io.github.kmpavloff.a2ademo.common.llm.ToolCall;
 import io.github.kmpavloff.a2ademo.common.llm.ToolSpec;
 import io.github.kmpavloff.a2ademo.common.rpc.JsonRpc;
 import io.github.kmpavloff.a2ademo.common.trace.Tracer;
-import io.github.kmpavloff.a2ademo.orchestrator.a2a.OrdersClient;
-import io.github.kmpavloff.a2ademo.orchestrator.a2a.Remote;
+import io.github.kmpavloff.a2ademo.orchestrator.a2a.Registry;
 import io.github.kmpavloff.a2ademo.orchestrator.a2ui.A2ui;
 import io.github.kmpavloff.a2ademo.orchestrator.agent.OrchestratorAgent;
 import io.github.kmpavloff.a2ademo.orchestrator.agent.SessionStore;
@@ -76,13 +75,13 @@ class WebE2eTest {
         });
         worker.start();
 
-        Remote remote = new Remote(
-                new AgentConfig("orders", "", base, "", "", false, "", "", AuthConfig.NONE), Tracer.noop());
-        remote.connect(); // eager, как в OrchestratorApplication: профиль нужен сразу для toolSpecs
-        OrdersClient orders = new OrdersClient(remote, Tracer.noop());
+        Registry reg = new Registry(
+                List.of(new AgentConfig("orders", "", base, "", "", false, "", "", AuthConfig.NONE)), Tracer.noop());
         model = new StubModel();
-        OrchestratorAgent agent = new OrchestratorAgent(model, List.of(orders), orders.profile().summary(), new SessionStore());
-        OrchestratorWebExecutor executor = new OrchestratorWebExecutor(agent, orders, Tracer.noop());
+        SessionStore sessions = new SessionStore();
+        OrchestratorWebExecutor executor = new OrchestratorWebExecutor(reg,
+                (tools, summary) -> new OrchestratorAgent(model, tools, summary, sessions),
+                sessions, Tracer.noop());
         controller = new A2aWebController(executor, OrchestratorCards.agentCard("http://localhost:8080"), Tracer.noop());
     }
 
@@ -112,6 +111,11 @@ class WebE2eTest {
         return Json.MAPPER.readTree(Json.MAPPER.writeValueAsString(resp));
     }
 
+    /** Части ответа лежат в завершающем сообщении задачи, не в артефакте. */
+    private static JsonNode replyParts(JsonNode task) {
+        return task.path("status").path("message").path("parts");
+    }
+
     @Test
     void textTurnEmitsA2uiParts() throws IOException {
         workerResults.add("""
@@ -126,7 +130,7 @@ class WebE2eTest {
 
         JsonNode task = invoke("{\"text\":\"статус заказа 1041\"}", null, true).path("result").path("task");
         assertEquals("TASK_STATE_COMPLETED", task.path("status").path("state").asText());
-        JsonNode parts = task.path("artifacts").get(0).path("parts");
+        JsonNode parts = replyParts(task);
         assertEquals(2, parts.size(), "text + one A2UI part carrying createSurface and updateComponents as an array: " + parts);
         assertEquals("Вот детали вашего заказа:", parts.get(0).path("text").asText());
         assertEquals("application/a2ui+json", parts.get(1).path("mediaType").asText());
@@ -144,9 +148,9 @@ class WebE2eTest {
         model.then(ChatModel.Completion.call(new ToolCall("c1", "ask_orders_agent", "{\"message\":\"статус заказа 1041\"}")))
                 .then(ChatModel.Completion.text("Готово."));
 
-        JsonNode parts = invoke("{\"text\":\"статус заказа 1041\"}", null, false)
-                .path("result").path("task").path("artifacts").get(0).path("parts");
-        assertEquals(1, parts.size(), "A2UI inactive → text-only artifact: " + parts);
+        JsonNode parts = replyParts(invoke("{\"text\":\"статус заказа 1041\"}", null, false)
+                .path("result").path("task"));
+        assertEquals(1, parts.size(), "A2UI inactive → text-only completing message: " + parts);
     }
 
     @Test
@@ -175,10 +179,10 @@ class WebE2eTest {
                     "metadata":{"kind":"widget/refund_form","version":1}}]}}}}
                 """);
         JsonNode task2 = invoke("""
-                {"data":{"version":"v0.9","action":{"name":"approve_refund","context":{"order_id":"1041"}}},
+                {"data":[{"version":"v0.9","action":{"name":"approve_refund","context":{"order_id":"1041"}}}],
                  "mediaType":"application/a2ui+json"}
                 """, contextId, true).path("result").path("task");
-        JsonNode parts2 = task2.path("artifacts").get(0).path("parts");
+        JsonNode parts2 = replyParts(task2);
         boolean hasTextField = parts2.toString().contains("TextField");
         assertTrue(hasTextField, "approve must produce the card form as A2UI: " + parts2);
 
@@ -193,12 +197,12 @@ class WebE2eTest {
                    {"raw":"0JrQstC40YLQsNC90YbQuNGP","filename":"receipt-1041.txt","mediaType":"text/plain"}]}]}}
                 """);
         JsonNode task3 = invoke("""
-                {"data":{"version":"v0.9","action":{"name":"submit_refund_details",
-                  "context":{"order_id":"1041","card_number":"4111 1111 1111 1111"}}},
+                {"data":[{"version":"v0.9","action":{"name":"submit_refund_details",
+                  "context":{"order_id":"1041","card_number":"4111 1111 1111 1111"}}}],
                  "mediaType":"application/a2ui+json"}
                 """, contextId, true).path("result").path("task");
         assertEquals("TASK_STATE_COMPLETED", task3.path("status").path("state").asText());
-        JsonNode parts3 = task3.path("artifacts").get(0).path("parts");
+        JsonNode parts3 = replyParts(task3);
         assertTrue(parts3.get(0).path("text").asText().contains("•••• 1111"));
         JsonNode file = parts3.get(parts3.size() - 1);
         assertEquals("receipt-1041.txt", file.path("filename").asText());
@@ -223,7 +227,7 @@ class WebE2eTest {
 
         JsonNode task1 = invoke("{\"text\":\"верни деньги за 1041\"}", null, true).path("result").path("task");
         String contextId = task1.path("contextId").asText();
-        JsonNode parts1 = task1.path("artifacts").get(0).path("parts");
+        JsonNode parts1 = replyParts(task1);
         assertTrue(parts1.size() >= 2, "confirmation widget must ride as an A2UI part: " + parts1);
 
         // Turn 2: the approve button. The stub LLM script is EMPTY — a model
@@ -233,13 +237,12 @@ class WebE2eTest {
                  "artifacts":[{"artifactId":"a2","parts":[{"text":"Готово, возврат оформлен."}]}]}}
                 """);
         String actionPart = """
-                {"data":{"version":"v0.9","action":{"name":"approve_refund","context":{"order_id":"1041"}}},
+                {"data":[{"version":"v0.9","action":{"name":"approve_refund","context":{"order_id":"1041"}}}],
                  "mediaType":"application/a2ui+json"}
                 """;
         JsonNode task2 = invoke(actionPart, contextId, true).path("result").path("task");
         assertEquals("TASK_STATE_COMPLETED", task2.path("status").path("state").asText());
-        assertEquals("Готово, возврат оформлен.",
-                task2.path("artifacts").get(0).path("parts").get(0).path("text").asText());
+        assertEquals("Готово, возврат оформлен.", replyParts(task2).get(0).path("text").asText());
     }
 
     @Test

@@ -43,8 +43,8 @@ class OrchestratorAgentToolsTest {
         SessionStore sessions = new SessionStore();
         RecordingModel model = new RecordingModel();
 
-        new OrchestratorAgent(model, List.of(), "", sessions).runTurn("s1", "первый вопрос", new OrchestratorAgent.TurnListener() {});
-        new OrchestratorAgent(model, List.of(), "", sessions).runTurn("s1", "второй вопрос", new OrchestratorAgent.TurnListener() {});
+        new OrchestratorAgent(model, List.of(), "", sessions).runTurn("s1", "первый вопрос", new OrchestratorAgent.TurnListener() {}, false);
+        new OrchestratorAgent(model, List.of(), "", sessions).runTurn("s1", "второй вопрос", new OrchestratorAgent.TurnListener() {}, false);
 
         List<String> texts = model.lastRequest.stream().map(ChatMessage::content).toList();
         assertTrue(texts.contains("первый вопрос"), "первый ход обязан остаться в истории: " + texts);
@@ -55,7 +55,7 @@ class OrchestratorAgentToolsTest {
     void exposesOneToolSpecPerAgent() {
         RecordingModel model = new RecordingModel();
         new OrchestratorAgent(model, List.of(), "", new SessionStore())
-                .runTurn("s1", "вопрос", new OrchestratorAgent.TurnListener() {});
+                .runTurn("s1", "вопрос", new OrchestratorAgent.TurnListener() {}, false);
         assertEquals(List.of(), model.lastTools, "без агентов инструментов нет");
     }
 }

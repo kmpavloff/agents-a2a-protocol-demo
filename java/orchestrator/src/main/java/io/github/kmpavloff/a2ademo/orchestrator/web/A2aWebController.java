@@ -5,7 +5,6 @@ import io.github.kmpavloff.a2ademo.common.Json;
 import io.github.kmpavloff.a2ademo.common.a2a.A2aMessage;
 import io.github.kmpavloff.a2ademo.common.a2a.A2aTask;
 import io.github.kmpavloff.a2ademo.common.a2a.AgentCard;
-import io.github.kmpavloff.a2ademo.common.a2a.Artifact;
 import io.github.kmpavloff.a2ademo.common.a2a.Part;
 import io.github.kmpavloff.a2ademo.common.a2a.TaskState;
 import io.github.kmpavloff.a2ademo.common.a2a.TaskStatus;
@@ -138,8 +137,11 @@ public class A2aWebController {
         task.addHistory(message);
 
         List<Part> parts = executor.execute(task.contextId, message, a2uiActive);
-        task.addArtifact(Artifact.of(parts));
-        task.status = TaskStatus.of(TaskState.COMPLETED, null);
+        // Части ответа — в завершающем сообщении задачи: туда их кладёт спека
+        // расширения A2UI, и оттуда их читает референсный клиент.
+        A2aMessage reply = A2aMessage.forTask(A2aMessage.ROLE_AGENT, task.id, task.contextId,
+                parts.toArray(new Part[0]));
+        task.status = TaskStatus.of(TaskState.COMPLETED, reply);
         return JsonRpc.Response.ok(req.id, Map.of("task", task));
     }
 }
