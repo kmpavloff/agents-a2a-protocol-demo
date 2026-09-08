@@ -88,7 +88,7 @@ public record AgentConfig(String id, String name, String url, String cardPath, S
             }
         }
         String type = a.auth().type();
-        if (!type.isEmpty() && !type.equalsIgnoreCase("basic")) {
+        if (!type.isEmpty() && !type.equals("basic")) {
             throw new IllegalArgumentException("agent \"" + a.id() + "\": unsupported auth type \"" + type + "\"");
         }
     }

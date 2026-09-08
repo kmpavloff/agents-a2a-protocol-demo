@@ -106,6 +106,24 @@ class AgentsConfigTest {
                 new AgentConfig("orders", "", "http://x", "", "", false, "", "", new AuthConfig("bearer", "u", "p"))));
     }
 
+    // Go — switch по a.Auth.Type с точным совпадением "" или "basic" — регистр
+    // не приводится, в отличие от AuthConfig.basic() на стороне вызова.
+    @Test
+    void rejectsANonLowercaseAuthType() {
+        assertThrows(IllegalArgumentException.class, () -> AgentConfig.validate(
+                new AgentConfig("orders", "", "http://x", "", "", false, "", "", new AuthConfig("Basic", "u", "p"))));
+    }
+
+    @Test
+    void rejectsADuplicateAgentId() {
+        List<AgentConfig> agents = List.of(
+                new AgentConfig("orders", "", "http://a", "", "", false, "", "", AuthConfig.NONE),
+                new AgentConfig("orders", "", "http://b", "", "", false, "", "", AuthConfig.NONE));
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> ConfigLoader.normalizeAgents(agents));
+        assertTrue(e.getMessage().contains("duplicate agent id"), e.getMessage());
+    }
+
     @Test
     void envVarNameMatchesGo() {
         assertEquals("A2A_AGENT_ORDERS_URL", AgentConfig.envVar("orders", "URL"));
