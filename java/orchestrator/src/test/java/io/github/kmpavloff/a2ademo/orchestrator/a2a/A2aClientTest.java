@@ -31,6 +31,7 @@ class A2aClientTest {
     final List<String> seenAuth = new ArrayList<>();
     final List<String> seenExtensions = new ArrayList<>();
     final List<String> seenLegacyExtensions = new ArrayList<>();
+    final List<String> seenUpgrade = new ArrayList<>();
     final List<JsonNode> seenRequests = new ArrayList<>();
     String sendResult = "{\"task\":{\"id\":\"t1\",\"contextId\":\"c1\",\"status\":{\"state\":\"TASK_STATE_COMPLETED\"}}}";
 
@@ -52,6 +53,7 @@ class A2aClientTest {
             // записи здесь регрессия («шлём только A2A-Extensions») осталась бы
             // незамеченной.
             seenLegacyExtensions.add(String.valueOf(ex.getRequestHeaders().getFirst("X-A2A-Extensions")));
+            seenUpgrade.add(String.valueOf(ex.getRequestHeaders().getFirst("Upgrade")));
             JsonNode req = Json.MAPPER.readTree(ex.getRequestBody());
             seenRequests.add(req);
             respond(ex, "{\"jsonrpc\":\"2.0\",\"id\":" + req.path("id") + ",\"result\":" + sendResult + "}");
@@ -153,6 +155,15 @@ class A2aClientTest {
     void leavesAProperlyWrappedResultAlone() {
         JsonNode wrapped = Json.MAPPER.createObjectNode().set("task", Json.MAPPER.createObjectNode());
         assertTrue(A2aClient.wrapBareResult(wrapped).has("task"));
+    }
+
+    // По умолчанию JDK шлёт h2c-апгрейд (заголовки Connection/Upgrade) на
+    // обычном http://, и живой сторонний агент на это отвечает ошибкой —
+    // клиент обязан явно закрепить HTTP/1.1, как это делает Go.
+    @Test
+    void doesNotSendAnH2cUpgradePreflightOnPlainHttp() {
+        client().sendMessage(A2aMessage.of(A2aMessage.ROLE_USER, Part.text("привет")), null);
+        assertEquals("null", seenUpgrade.getFirst());
     }
 
     @Test

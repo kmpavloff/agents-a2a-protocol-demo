@@ -30,6 +30,13 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public class A2aClient {
 
+    // По умолчанию JDK предпочитает HTTP/2 и на обычном http:// пытается
+    // апгрейднуться на h2c: шлёт "Connection: Upgrade, HTTP2-Settings" и
+    // "Upgrade: h2c" прямо в первом запросе. У Go (internal/a2abridge/remote.go,
+    // http.DefaultTransport) HTTP/2 включается только через ALPN поверх TLS,
+    // так что по http:// он такой преамбулы не шлёт вовсе. Живой сторонний
+    // агент (ouroboros) на этот апгрейд отвечал HTTP 500/400 и ронял весь ход —
+    // поэтому версия закреплена явно, как у Go.
     private final HttpClient http;
     private final AtomicLong nextId = new AtomicLong(1);
     private final String invokeUrl;
@@ -42,7 +49,10 @@ public class A2aClient {
         this.timeout = timeout;
         this.auth = auth;
         this.trace = trace;
-        this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+        this.http = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(10))
+                .version(HttpClient.Version.HTTP_1_1)
+                .build();
     }
 
     /** Читает карточку по адресу и пути из конфига и строит клиента её JSONRPC-интерфейса. */
@@ -51,7 +61,12 @@ public class A2aClient {
         String cardPath = cfg.cardPath().isEmpty() ? AgentConfig.DEFAULT_CARD_PATH : cfg.cardPath();
         AgentCard card;
         try {
-            HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+            // Та же причина закрепить HTTP/1.1, что и у поля http выше:
+            // без неё JDK шлёт h2c-апгрейд и на запрос за карточкой агента.
+            HttpClient http = HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofSeconds(10))
+                    .version(HttpClient.Version.HTTP_1_1)
+                    .build();
             // URI.create бросает непроверяемое IllegalArgumentException, которое
             // соседний catch (IOException | InterruptedException) не поймает —
             // заворачиваем сразу, чтобы вызывающий код видел A2aException, как и
