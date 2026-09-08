@@ -86,7 +86,8 @@ public class OrchestratorApplication {
                             (tools, summary) -> new OrchestratorAgent(model, tools, summary, sessions),
                             sessions, trace),
                     OrchestratorCards.agentCard(cfg.publicUrl()),
-                    trace);
+                    trace,
+                    registry);
             SpringApplication app = new SpringApplication(WebApplication.class);
             app.setDefaultProperties(Map.of(
                     "server.port", cfg.port(),
