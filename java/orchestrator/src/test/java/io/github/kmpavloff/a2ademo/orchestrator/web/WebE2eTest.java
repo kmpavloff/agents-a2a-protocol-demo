@@ -14,6 +14,7 @@ import io.github.kmpavloff.a2ademo.orchestrator.a2a.OrdersClient;
 import io.github.kmpavloff.a2ademo.orchestrator.a2a.WorkerProfile;
 import io.github.kmpavloff.a2ademo.orchestrator.a2ui.A2ui;
 import io.github.kmpavloff.a2ademo.orchestrator.agent.OrchestratorAgent;
+import io.github.kmpavloff.a2ademo.orchestrator.agent.SessionStore;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -77,7 +78,7 @@ class WebE2eTest {
         A2aClient.Resolved resolved = A2aClient.resolve(base);
         OrdersClient orders = new OrdersClient(resolved.client(), WorkerProfile.fromCard(resolved.card()), Tracer.noop());
         model = new StubModel();
-        OrchestratorAgent agent = new OrchestratorAgent(model, orders);
+        OrchestratorAgent agent = new OrchestratorAgent(model, List.of(orders), orders.profile().summary(), new SessionStore());
         OrchestratorWebExecutor executor = new OrchestratorWebExecutor(agent, orders, Tracer.noop());
         controller = new A2aWebController(executor, OrchestratorCards.agentCard("http://localhost:8080"), Tracer.noop());
     }

@@ -7,6 +7,7 @@ import io.github.kmpavloff.a2ademo.orchestrator.a2a.A2aClient;
 import io.github.kmpavloff.a2ademo.orchestrator.a2a.OrdersClient;
 import io.github.kmpavloff.a2ademo.orchestrator.a2a.WorkerProfile;
 import io.github.kmpavloff.a2ademo.orchestrator.agent.OrchestratorAgent;
+import io.github.kmpavloff.a2ademo.orchestrator.agent.SessionStore;
 import io.github.kmpavloff.a2ademo.orchestrator.tui.Repl;
 import io.github.kmpavloff.a2ademo.orchestrator.web.OrchestratorCards;
 import io.github.kmpavloff.a2ademo.orchestrator.web.OrchestratorWebExecutor;
@@ -15,6 +16,7 @@ import org.springframework.boot.SpringApplication;
 
 import java.io.FileWriter;
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -72,7 +74,7 @@ public class OrchestratorApplication {
         console.logf("orchestrator tools (1):");
         console.logf("  - %s: %s", profile.toolName(), profile.toolDesc());
 
-        OrchestratorAgent agent = new OrchestratorAgent(model, orders);
+        OrchestratorAgent agent = new OrchestratorAgent(model, List.of(orders), orders.profile().summary(), new SessionStore());
 
         if (web) {
             WebApplication.configure(
