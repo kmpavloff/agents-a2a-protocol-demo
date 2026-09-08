@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.io.Writer;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -98,8 +99,21 @@ public final class Tracer {
         }
         out = maskCardLike(out);
         String suffix = "";
-        if (out.length() > MAX_DUMP_BYTES) {
-            out = out.substring(0, MAX_DUMP_BYTES);
+        // Измеряем размер в UTF-8 байтах, обрезаем на границе символа если нужно.
+        // Go обрезает точно в байте, что может расколоть многобайтовую последовательность.
+        // Здесь обрезаем в пределах символа — это надёжнее.
+        byte[] outBytes = out.getBytes(StandardCharsets.UTF_8);
+        if (outBytes.length > MAX_DUMP_BYTES) {
+            // Найти наибольший префикс, укладывающийся в лимит
+            int charIndex = out.length();
+            while (charIndex > 0) {
+                byte[] prefixBytes = out.substring(0, charIndex).getBytes(StandardCharsets.UTF_8);
+                if (prefixBytes.length <= MAX_DUMP_BYTES) {
+                    out = out.substring(0, charIndex);
+                    break;
+                }
+                charIndex--;
+            }
             suffix = System.lineSeparator() + "    … обрезано";
         }
         logf("⇄ %s:%n    %s%s", label, out.replace("\n", System.lineSeparator() + "    "), suffix);

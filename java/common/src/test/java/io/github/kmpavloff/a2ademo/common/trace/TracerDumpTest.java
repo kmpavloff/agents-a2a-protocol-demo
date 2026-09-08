@@ -53,4 +53,21 @@ class TracerDumpTest {
         new Tracer("[A2A] ", true, new Object[]{out}).dump("ответ", "x".repeat(200_000));
         assertTrue(out.toString().contains("… обрезано"), "длинное тело обязано обрезаться");
     }
+
+    @Test
+    void dumpTruncatesBasedOnUtf8Bytes() {
+        // Cyrillic characters are 2 bytes in UTF-8 each. Create 33K Cyrillic chars
+        // = 66KB in UTF-8, which exceeds 64KB limit. With char-based truncation,
+        // this would NOT truncate (only 33K chars). With byte-based truncation,
+        // it will truncate correctly.
+        String cyrillicBody = "й".repeat(33_000); // Cyrillic letter й = 2 bytes in UTF-8
+        StringWriter out = new StringWriter();
+        new Tracer("[A2A] ", true, new Object[]{out}).dump("тест", cyrillicBody);
+        String output = out.toString();
+        assertTrue(output.contains("… обрезано"),
+            "Cyrillic body with 66KB UTF-8 size must truncate at 64KB byte limit");
+        // Verify the output is actually truncated (not the full body)
+        assertTrue(output.length() < 100_000,
+            "Output should be significantly smaller than input body");
+    }
 }
