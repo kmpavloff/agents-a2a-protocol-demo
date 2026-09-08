@@ -6,7 +6,11 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * YAML config loader with env-var overrides, mirroring the Go internal/config
@@ -29,9 +33,10 @@ public final class ConfigLoader {
         }
     }
 
-    /** listenAddr/publicUrl are used only in --web mode (A2A server + frontend). */
-    public record OrchestratorConfig(
-            String listenAddr, String publicUrl, String workerUrl, String a2aLogPath, LlmConfig llm) {
+    /** listenAddr/publicUrl используются только в режиме --web (A2A-сервер + фронтенд). */
+    public record OrchestratorConfig(String listenAddr, String publicUrl, String workerUrl,
+                                     List<AgentConfig> agents, String agentsOverlayPath,
+                                     String a2aLogPath, LlmConfig llm) {
         public int port() {
             return parsePort(listenAddr);
         }
@@ -53,11 +58,81 @@ public final class ConfigLoader {
         Map<String, Object> y = readYaml(path);
         String listenAddr = env("ORCHESTRATOR_LISTEN_ADDR", str(y, "listen_addr", ":8080"));
         String publicUrl = env("ORCHESTRATOR_PUBLIC_URL", str(y, "public_url", "http://localhost:8080"));
-        String workerUrl = env("WORKER_URL", str(y, "worker_url", "http://localhost:8081"));
+        // Умолчания у worker_url нет намеренно, как и в Go: иначе переменная
+        // WORKER_URL и список agents молча спорили бы друг с другом.
+        String workerUrl = env("WORKER_URL", str(y, "worker_url", ""));
         String logPath = env("A2A_LOG_PATH", str(y, "a2a_log_path", "a2a-orchestrator.log"));
+        String overlayPath = env("A2A_AGENTS_OVERLAY_PATH",
+                str(y, "agents_overlay_path", "configs/agents.local.yaml"));
         LlmConfig llm = llm(y);
         require(llm.baseUrl(), "orchestrator config: llm.base_url is required (yaml or LLM_BASE_URL)");
-        return new OrchestratorConfig(listenAddr, publicUrl, workerUrl, logPath, llm);
+
+        List<AgentConfig> agents = agents(y);
+        // Совместимость: одиночный worker_url становится единственным агентом.
+        if (agents.isEmpty() && !workerUrl.isBlank()) {
+            agents = List.of(new AgentConfig("orders", "Агент заказов", workerUrl,
+                    "", "", false, "", "", AuthConfig.NONE));
+        }
+        if (agents.isEmpty()) {
+            throw new IllegalStateException(
+                    "orchestrator config: at least one agent (agents: or worker_url:) is required");
+        }
+        return new OrchestratorConfig(listenAddr, publicUrl, workerUrl,
+                normalizeAgents(agents), overlayPath, logPath, llm);
+    }
+
+    /** Записи agents: из YAML, без умолчаний и проверок — их делает normalizeAgents. */
+    @SuppressWarnings("unchecked")
+    private static List<AgentConfig> agents(Map<String, Object> y) {
+        if (!(y.get("agents") instanceof List<?> list)) {
+            return List.of();
+        }
+        List<AgentConfig> out = new ArrayList<>(list.size());
+        for (Object item : list) {
+            if (!(item instanceof Map<?, ?> raw)) {
+                continue;
+            }
+            Map<String, Object> a = (Map<String, Object>) raw;
+            Map<String, Object> auth = section(a, "auth");
+            out.add(new AgentConfig(
+                    str(a, "id", ""), str(a, "name", ""), str(a, "url", ""),
+                    str(a, "card_path", ""), str(a, "skill", ""),
+                    Boolean.TRUE.equals(a.get("verbatim")),
+                    str(a, "timeout", ""), str(a, "description", ""),
+                    new AuthConfig(str(auth, "type", ""), str(auth, "username", ""), str(auth, "password", ""))));
+        }
+        return out;
+    }
+
+    /**
+     * Подставляет умолчания и env-перекрытия, затем валидирует список.
+     * Применяется и к списку из YAML, и к слитому с overlay — поэтому env
+     * остаётся последним словом в обоих случаях.
+     */
+    public static List<AgentConfig> normalizeAgents(List<AgentConfig> agents) {
+        Set<String> seen = new HashSet<>(agents.size());
+        List<AgentConfig> out = new ArrayList<>(agents.size());
+        for (AgentConfig a : agents) {
+            // Адрес перекрывается окружением: в контейнере агент живёт по
+            // другому имени, чем на машине разработчика, а конфиг один и тот же.
+            String urlEnv = System.getenv(AgentConfig.envVar(a.id(), "URL"));
+            if (urlEnv != null && !urlEnv.isBlank()) {
+                a = a.withUrl(urlEnv);
+            }
+            AgentConfig.validate(a);
+            if (!seen.add(a.id())) {
+                throw new IllegalStateException("orchestrator config: duplicate agent id \"" + a.id() + "\"");
+            }
+            if (a.cardPath().isEmpty()) {
+                a = a.withCardPath(AgentConfig.DEFAULT_CARD_PATH);
+            }
+            String passEnv = System.getenv(AgentConfig.envVar(a.id(), "PASSWORD"));
+            if (passEnv != null && !passEnv.isBlank()) {
+                a = a.withPassword(passEnv);
+            }
+            out.add(a);
+        }
+        return List.copyOf(out);
     }
 
     private static LlmConfig llm(Map<String, Object> y) {

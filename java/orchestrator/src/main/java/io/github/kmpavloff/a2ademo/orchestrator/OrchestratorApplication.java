@@ -48,16 +48,19 @@ public class OrchestratorApplication {
                 : new Tracer("[A2A client] ", logFile);
         console.logf("A2A protocol trace → %s%s", cfg.a2aLogPath(), web ? " + stdout" : "");
 
+        // Временно: клиент по-прежнему строится только на первом агенте списка.
+        // Полная разводка по всему списку agents — в задаче 12.
+        String workerUrl = cfg.agents().getFirst().url();
         A2aClient.Resolved resolved;
         try {
-            resolved = A2aClient.resolve(cfg.workerUrl());
+            resolved = A2aClient.resolve(workerUrl);
         } catch (A2aClient.A2aException e) {
-            console.logf("orders client (is the worker running at %s?): %s", cfg.workerUrl(), e.getMessage());
+            console.logf("orders client (is the worker running at %s?): %s", workerUrl, e.getMessage());
             logFile.close();
             System.exit(1);
             return;
         }
-        trace.logf("resolved worker AgentCard \"%s\" at %s", resolved.card().name, cfg.workerUrl());
+        trace.logf("resolved worker AgentCard \"%s\" at %s", resolved.card().name, workerUrl);
 
         WorkerProfile profile = WorkerProfile.fromCard(resolved.card());
         trace.logf("derived delegating tool \"%s\" from card", profile.toolName());
@@ -65,7 +68,7 @@ public class OrchestratorApplication {
         OrdersClient orders = new OrdersClient(resolved.client(), profile, trace);
         OpenAiChatModel model = new OpenAiChatModel(cfg.llm());
         console.logf("orchestrator | LLM=%s model=\"%s\" | worker=%s",
-                cfg.llm().baseUrl(), cfg.llm().model(), cfg.workerUrl());
+                cfg.llm().baseUrl(), cfg.llm().model(), workerUrl);
         console.logf("orchestrator tools (1):");
         console.logf("  - %s: %s", profile.toolName(), profile.toolDesc());
 
