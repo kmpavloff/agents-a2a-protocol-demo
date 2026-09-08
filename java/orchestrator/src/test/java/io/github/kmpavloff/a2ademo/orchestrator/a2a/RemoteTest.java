@@ -128,6 +128,15 @@ class RemoteTest {
         assertEquals("Подтвердите возврат (да/нет)", first.text());
         assertEquals("t1", r.pendingTaskId("s1"));
 
+        // Первый запрос новой задачи: SendMessage от пользователя с эхом текста
+        // и без taskId — id ещё не существует.
+        JsonNode initial = seenRequests.getFirst();
+        assertEquals("SendMessage", initial.path("method").asText());
+        JsonNode initialMsg = initial.path("params").path("message");
+        assertEquals("ROLE_USER", initialMsg.path("role").asText());
+        assertEquals("верни 1041", initialMsg.path("parts").get(0).path("text").asText());
+        assertTrue(initialMsg.path("taskId").isMissingNode(), "new task must not reference a taskId");
+
         results.push("{\"task\":{\"id\":\"t1\",\"contextId\":\"c1\",\"status\":{\"state\":\"TASK_STATE_COMPLETED\"},"
                 + "\"artifacts\":[{\"parts\":[{\"text\":\"Возврат оформлен\"}]}]}}");
         Remote.Reply second = r.ask("s1", "да", false);
