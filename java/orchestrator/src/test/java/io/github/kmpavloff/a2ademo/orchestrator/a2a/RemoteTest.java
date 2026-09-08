@@ -16,6 +16,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -25,6 +26,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Один ход разговора с удалённым агентом. */
@@ -177,6 +179,24 @@ class RemoteTest {
         Remote.Reply reply = remote(cfg()).ask("s1", "статус 1041", true);
         assertEquals("Вот заказ", reply.text(), "разметка не должна стать ответом пользователю");
         assertEquals(1, reply.a2ui().size());
+    }
+
+    // Ход ограничен целиком, включая опрос GetTask: агент, зависший в WORKING
+    // навсегда, не должен держать вызывающий поток бесконечно.
+    @Test
+    void boundsTheWholeTurnAcrossPolling() {
+        String working = "{\"task\":{\"id\":\"t1\",\"status\":{\"state\":\"TASK_STATE_WORKING\"}}}";
+        results.push(working);
+        for (int i = 0; i < 20; i++) {
+            results.addLast(working);
+        }
+        AgentConfig shortTimeout = new AgentConfig("orders", "Агент заказов", base, "", "", false, "3s", "", AuthConfig.NONE);
+        Remote r = remote(shortTimeout);
+
+        A2aClient.A2aException e = assertTimeoutPreemptively(Duration.ofSeconds(10), () ->
+                assertThrows(A2aClient.A2aException.class, () -> r.ask("s1", "привет", false)));
+        assertTrue(e.getMessage().contains("t1"), "в сообщении назван id задачи: " + e.getMessage());
+        assertTrue(e.getMessage().contains("TASK_STATE_WORKING"), "в сообщении названо состояние: " + e.getMessage());
     }
 
     @Test

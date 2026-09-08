@@ -189,9 +189,14 @@ public class Remote {
                 throw e;
             }
             card = resolved.card();
-            client = resolved.client();
-            available = true;
             profile = buildProfile(resolved.card());
+            available = true;
+            // client — последним: он volatile и это его чтением connected-проверка
+            // («client != null») решает, что соединение готово. Пишем его после
+            // card/profile/available, чтобы поток, увидевший ненулевой client,
+            // гарантированно увидел и их — иначе он мог бы уйти с этим методом,
+            // застав ещё placeholder-профиль с пустым именем инструмента.
+            client = resolved.client();
             trace.logf("resolved AgentCard \"%s\" of agent \"%s\" at %s (tool \"%s\")",
                     resolved.card().name, cfg.id(), cfg.url(), profile.toolName());
         }
@@ -199,11 +204,13 @@ public class Remote {
 
     /**
      * Роняет пометку доступности и заставляет следующий connect заново резолвить
-     * карточку: соединение могло умереть вместе с агентом.
+     * карточку: соединение могло умереть вместе с агентом. client обнуляется
+     * первым по той же причине, по которой connect пишет его последним: пока он
+     * не null, connected() считает соединение рабочим.
      */
     private void markUnavailable() {
-        available = false;
         client = null;
+        available = false;
     }
 
     /**
@@ -277,6 +284,11 @@ public class Remote {
         Pending p = pending.get(sessionId);
         String contextId = contexts.get(sessionId);
         boolean a2ui = wantA2ui && acceptsA2ui();
+        // Граница на весь ход целиком — SendMessage и последующий опрос GetTask
+        // вместе, как в Go (context.WithTimeout вокруг ask). Таймаут конфига
+        // иначе ограничивал бы только один HTTP-запрос: агент, зависший в
+        // WORKING, держал бы вызывающий поток бесконечно.
+        Instant deadline = Instant.now().plus(cfg.timeoutDuration());
 
         trace.logf("──▶ delegating to agent \"%s\" | session=%s", cfg.id(), sessionId);
 
@@ -331,15 +343,25 @@ public class Remote {
             }
             return replyFromParts(res.message().parts, null, "");
         }
-        return replyFromTask(sessionId, awaitTerminal(c, res.task()));
+        return replyFromTask(sessionId, awaitTerminal(c, res.task(), deadline));
     }
 
-    /** Опрашивает GetTask, пока задача не выйдет из рабочего состояния. */
-    private A2aTask awaitTerminal(A2aClient c, A2aTask task) {
+    /**
+     * Опрашивает GetTask, пока задача не выйдет из рабочего состояния, но не
+     * дольше deadline — той же границы, что охватывает и предшествующий
+     * SendMessage. Без неё агент, оставивший задачу в WORKING навсегда, топил
+     * бы вызывающий поток без права на восстановление.
+     */
+    private A2aTask awaitTerminal(A2aClient c, A2aTask task, Instant deadline) {
         while (true) {
             String state = task.status == null ? "" : task.status.state;
             if (!TaskState.WORKING.equals(state) && !TaskState.SUBMITTED.equals(state)) {
                 return task;
+            }
+            if (!Instant.now().isBefore(deadline)) {
+                trace.logf("    ✖ deadline exceeded while polling task %s (state=%s)", task.id, state);
+                throw new A2aClient.A2aException(
+                        "agent \"" + cfg.id() + "\": task " + task.id + " still " + state + ": timed out");
             }
             trace.logf("    … task %s is %s, polling GetTask in %s", task.id, state, POLL_INTERVAL);
             try {
