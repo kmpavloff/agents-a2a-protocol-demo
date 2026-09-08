@@ -1,0 +1,127 @@
+package io.github.kmpavloff.a2ademo.orchestrator.store;
+
+import io.github.kmpavloff.a2ademo.common.config.AgentConfig;
+import io.github.kmpavloff.a2ademo.common.config.AuthConfig;
+import org.yaml.snakeyaml.DumperOptions;
+import org.yaml.snakeyaml.Yaml;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.PosixFilePermissions;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/** Overlay-файл со списком агентов: чтение и атомарная запись. */
+public final class OverlayFile {
+
+    private OverlayFile() {}
+
+    /** Объясняет тому, кто откроет файл руками, почему его правки проживут до первого сохранения из UI. */
+    private static final String HEADER = """
+            # Управляется из веб-интерфейса (экран «Настройки»).
+            # Правки руками будут перезаписаны при следующем сохранении.
+            """;
+
+    /** Читает overlay. Отсутствие файла — обычное состояние свежего клона, а не ошибка. */
+    @SuppressWarnings("unchecked")
+    public static List<AgentOverride> load(Path path) {
+        if (!Files.exists(path)) {
+            return List.of();
+        }
+        Map<String, Object> doc;
+        try (InputStream in = Files.newInputStream(path)) {
+            doc = new Yaml().load(in);
+        } catch (IOException e) {
+            throw new IllegalStateException("read agents overlay " + path + ": " + e.getMessage(), e);
+        } catch (RuntimeException e) {
+            throw new IllegalStateException("parse agents overlay " + path + ": " + e.getMessage(), e);
+        }
+        if (doc == null || !(doc.get("agents") instanceof List<?> list)) {
+            return List.of();
+        }
+        List<AgentOverride> out = new ArrayList<>(list.size());
+        for (Object item : list) {
+            if (!(item instanceof Map<?, ?> raw)) {
+                continue;
+            }
+            Map<String, Object> a = (Map<String, Object>) raw;
+            Map<String, Object> auth = a.get("auth") instanceof Map<?, ?> m
+                    ? (Map<String, Object>) m : Map.of();
+            out.add(new AgentOverride(new AgentConfig(
+                    str(a, "id"), str(a, "name"), str(a, "url"), str(a, "card_path"), str(a, "skill"),
+                    Boolean.TRUE.equals(a.get("verbatim")), str(a, "timeout"), str(a, "description"),
+                    new AuthConfig(str(auth, "type"), str(auth, "username"), str(auth, "password"))),
+                    Boolean.TRUE.equals(a.get("hidden"))));
+        }
+        return List.copyOf(out);
+    }
+
+    /**
+     * Пишет overlay целиком, атомарно: сначала временный файл рядом, потом
+     * переименование. Оборванная запись иначе оставила бы половину списка
+     * агентов, и оркестратор не поднялся бы вовсе.
+     */
+    public static void save(Path path, List<AgentOverride> over) {
+        List<Object> agents = new ArrayList<>(over.size());
+        for (AgentOverride o : over) {
+            AgentConfig a = o.agent();
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", a.id());
+            m.put("name", a.name());
+            m.put("url", a.url());
+            m.put("card_path", a.cardPath());
+            m.put("skill", a.skill());
+            m.put("verbatim", a.verbatim());
+            m.put("timeout", a.timeout());
+            m.put("description", a.description());
+            m.put("auth", new LinkedHashMap<>(Map.of(
+                    "type", a.auth().type(), "username", a.auth().username(), "password", a.auth().password())));
+            if (o.hidden()) {
+                m.put("hidden", true);
+            }
+            agents.add(m);
+        }
+        DumperOptions opts = new DumperOptions();
+        opts.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);
+        String body = new Yaml(opts).dump(Map.of("agents", agents));
+
+        Path dir = path.toAbsolutePath().getParent();
+        Path tmp = null;
+        try {
+            Files.createDirectories(dir);
+            // Временный файл — в том же каталоге: переименование атомарно только
+            // в пределах одной файловой системы.
+            tmp = Files.createTempFile(dir, ".agents-", ".yaml");
+            try {
+                // Пароли лежат открытым текстом, как и в orchestrator.yaml.
+                Files.setPosixFilePermissions(tmp, PosixFilePermissions.fromString("rw-------"));
+            } catch (UnsupportedOperationException | IOException ignored) {
+                // не POSIX-система — пропускаем
+            }
+            Files.writeString(tmp, HEADER + body, StandardCharsets.UTF_8);
+            Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            tmp = null;
+        } catch (IOException e) {
+            throw new IllegalStateException("write agents overlay " + path + ": " + e.getMessage(), e);
+        } finally {
+            if (tmp != null) {
+                try {
+                    Files.deleteIfExists(tmp);
+                } catch (IOException ignored) {
+                    // временный файл останется — на работу это не влияет
+                }
+            }
+        }
+    }
+
+    private static String str(Map<String, Object> m, String key) {
+        Object v = m.get(key);
+        return v == null ? "" : String.valueOf(v);
+    }
+}
