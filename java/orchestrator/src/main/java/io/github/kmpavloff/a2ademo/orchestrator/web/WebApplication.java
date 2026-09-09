@@ -2,6 +2,8 @@ package io.github.kmpavloff.a2ademo.orchestrator.web;
 
 import io.github.kmpavloff.a2ademo.common.a2a.AgentCard;
 import io.github.kmpavloff.a2ademo.common.trace.Tracer;
+import io.github.kmpavloff.a2ademo.orchestrator.a2a.Registry;
+import io.github.kmpavloff.a2ademo.orchestrator.store.AgentStore;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 
@@ -16,12 +18,17 @@ public class WebApplication {
     private static OrchestratorWebExecutor executorHolder;
     private static AgentCard cardHolder;
     private static Tracer traceHolder;
+    private static Registry registryHolder;
+    private static AgentStore agentStoreHolder;
 
     /** Hands over the pre-built collaborators before the context starts. */
-    public static void configure(OrchestratorWebExecutor executor, AgentCard card, Tracer trace) {
+    public static void configure(OrchestratorWebExecutor executor, AgentCard card, Tracer trace, Registry registry,
+                                  AgentStore agentStore) {
         executorHolder = executor;
         cardHolder = card;
         traceHolder = trace;
+        registryHolder = registry;
+        agentStoreHolder = agentStore;
     }
 
     @Bean
@@ -37,5 +44,15 @@ public class WebApplication {
     @Bean
     Tracer tracer() {
         return traceHolder;
+    }
+
+    @Bean
+    Registry registry() {
+        return registryHolder;
+    }
+
+    @Bean
+    AgentStore agentStore() {
+        return agentStoreHolder;
     }
 }

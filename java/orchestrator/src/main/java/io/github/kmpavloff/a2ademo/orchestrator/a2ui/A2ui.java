@@ -12,10 +12,45 @@ import java.util.concurrent.atomic.AtomicInteger;
  * that knows the A2UI wire format; the transport layer stays A2UI-agnostic.
  */
 public final class A2ui {
-    public static final String EXTENSION_URI = "https://a2ui.org/a2a-extension/a2ui/v0.9";
+    /**
+     * Ревизия A2UI, на которой мы говорим. У 0.9.1 свой URI; v1.0 существует,
+     * но это релиз-кандидат, и мы его пока не берём.
+     */
+    public static final String EXTENSION_URI = "https://a2ui.org/a2a-extension/a2ui/v0.9.1";
+
+    /**
+     * Та же поддержка под именем предыдущей ревизии. Объявляем и принимаем оба:
+     * клиент, знающий только 0.9, иначе не поймёт, что мы умеем рисовать.
+     */
+    public static final String LEGACY_EXTENSION_URI = "https://a2ui.org/a2a-extension/a2ui/v0.9";
+
     public static final String MIME_TYPE = "application/a2ui+json";
-    public static final String VERSION = "v0.9";
+
+    /** Тип из ранних сборок A2UI (0.8 и часть 0.9). Только принимаем. */
+    public static final String LEGACY_MIME_TYPE = "application/json+a2ui";
+
+    /**
+     * Значение поля version в сообщениях. Схемы 0.9.1 объявляют его как enum
+     * ["v0.9", "v0.9.1"], схемы 0.9 — как const "v0.9". Полезная нагрузка у
+     * ревизий одна: 0.9.1 лишь стандартизировал MIME и ослабил требование к
+     * уникальности surfaceId.
+     */
+    public static final String VERSION = "v0.9.1";
+
+    /**
+     * Ключ внутри a2uiClientCapabilities. Именно "v0.9", а не VERSION: схема
+     * client_capabilities.json в наборе 0.9.1 объявляет ровно это свойство.
+     */
+    public static final String CAPABILITIES_KEY = "v0.9";
+
+    /** Каталог компонентов. В 0.9.1 свой не заводился — ссылка на набор v0_9. */
     public static final String CATALOG_ID = "https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json";
+
+    /**
+     * Ключ, под которым тип части лежит в её метаданных. Спека расширения
+     * опознаёт A2UI-часть именно так, а не по полю mediaType.
+     */
+    public static final String MIME_KEY = "mimeType";
 
     /** Makes surface ids unique within the process (parity with the Go counter). */
     private static final AtomicInteger surfaceCounter = new AtomicInteger();
@@ -29,28 +64,107 @@ public final class A2ui {
     /** A parsed incoming A2UI action event: {@code {name, context}}. */
     public record Action(String name, Map<String, Object> context) {}
 
+    /** Поверхность и компонент, откуда пришло действие; оба поля могут пустеть. */
+    public record Origin(String surfaceId, String sourceComponentId) {}
+
     /**
-     * Extracts an A2UI action event from a DataPart's data map. Shape:
-     * {@code {"version":"v0.9","action":{"name":"...","context":{...}}}}.
-     * Returns null when the map is not an action payload.
+     * Достаёт событие A2UI из полезной нагрузки DataPart. Форма:
+     * {@code {"version":"v0.9.1","action":{"name":"...","context":{...}}}}.
+     * По спеке data — массив таких сообщений, поэтому принимается и он: берётся
+     * первое сообщение-действие. Возвращает null, когда действия в нагрузке нет.
      */
     @SuppressWarnings("unchecked")
-    public static Action parseAction(Object data) {
-        if (!(data instanceof Map<?, ?> m)) {
+    public static Action parseAction(Object payload) {
+        if (payload instanceof List<?> list) {
+            for (Object item : list) {
+                Action a = parseAction(item);
+                if (a != null) {
+                    return a;
+                }
+            }
             return null;
         }
-        Object actionObj = m.get("action");
-        if (!(actionObj instanceof Map<?, ?> action)) {
+        if (!(payload instanceof Map<?, ?> m)) {
             return null;
         }
-        Object name = action.get("name");
-        if (!(name instanceof String s) || s.isEmpty()) {
+        if (!(m.get("action") instanceof Map<?, ?> action)) {
+            return null;
+        }
+        if (!(action.get("name") instanceof String name) || name.isEmpty()) {
             return null;
         }
         Map<String, Object> ctx = action.get("context") instanceof Map<?, ?> c
                 ? new LinkedHashMap<>((Map<String, Object>) c)
                 : new LinkedHashMap<>();
-        return new Action(s, ctx);
+        return new Action(name, ctx);
+    }
+
+    /**
+     * Поверхность и компонент источника события. Схема их не требует, поэтому
+     * оба значения могут быть пустыми; нужны, чтобы передать событие дальше, не
+     * потеряв, какая кнопка какой карточки нажата.
+     */
+    public static Origin actionOrigin(Object payload) {
+        if (payload instanceof List<?> list) {
+            for (Object item : list) {
+                Origin o = actionOrigin(item);
+                if (!o.surfaceId().isEmpty() || !o.sourceComponentId().isEmpty()) {
+                    return o;
+                }
+            }
+            return new Origin("", "");
+        }
+        if (!(payload instanceof Map<?, ?> m) || !(m.get("action") instanceof Map<?, ?> action)) {
+            return new Origin("", "");
+        }
+        return new Origin(
+                action.get("surfaceId") instanceof String s ? s : "",
+                action.get("sourceComponentId") instanceof String s ? s : "");
+    }
+
+    /**
+     * Несёт ли часть разметку A2UI. Спека помечает её metadata.mimeType;
+     * mediaType — второй, менее формальный способ, которым пользуемся мы сами и
+     * живые агенты. Принимаем оба и оба типа, отдаём всегда metadata.mimeType.
+     */
+    public static boolean isA2ui(String mediaType, Map<String, Object> metadata) {
+        if (knownMime(mediaType)) {
+            return true;
+        }
+        return metadata != null && metadata.get(MIME_KEY) instanceof String m && knownMime(m);
+    }
+
+    private static boolean knownMime(String mime) {
+        return MIME_TYPE.equals(mime) || LEGACY_MIME_TYPE.equals(mime);
+    }
+
+    /**
+     * Значение metadata.a2uiClientCapabilities — объявление рендерера о том,
+     * какие каталоги он умеет. Вместе с заголовком расширения это штатный
+     * признак «клиент умеет A2UI»; acceptedOutputModes спека им не считает.
+     */
+    public static Map<String, Object> clientCapabilities() {
+        return Map.of(CAPABILITIES_KEY, Map.of("supportedCatalogIds", List.of(CATALOG_ID)));
+    }
+
+    /**
+     * Событие клиента по схеме client_to_server. Все пять полей действия
+     * обязательны, а конверт — ровно version и action; поэтому пустые surfaceId
+     * и sourceComponentId именно пустеют, а не исчезают: без них payload не
+     * пройдёт валидацию у агента, который её делает.
+     */
+    public static Map<String, Object> newAction(String name, String surfaceId, String sourceComponentId,
+                                                Map<String, Object> ctx, String timestamp) {
+        Map<String, Object> action = new LinkedHashMap<>();
+        action.put("name", name);
+        action.put("surfaceId", surfaceId == null ? "" : surfaceId);
+        action.put("sourceComponentId", sourceComponentId == null ? "" : sourceComponentId);
+        action.put("timestamp", timestamp);
+        action.put("context", ctx == null ? Map.of() : ctx);
+        Map<String, Object> msg = new LinkedHashMap<>();
+        msg.put("version", VERSION);
+        msg.put("action", action);
+        return msg;
     }
 
     /**

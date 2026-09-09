@@ -18,10 +18,13 @@ public final class OrchestratorCards {
         card.version = "0.1.0";
         card.defaultInputModes = List.of("text/plain");
         card.defaultOutputModes = List.of("text/plain");
-        // Advertise the A2UI A2A-extension so clients activate generative UI.
-        card.capabilities = Map.of("extensions", List.of(Map.of(
-                "uri", A2ui.EXTENSION_URI,
-                "description", "Отдаёт интерфейс через A2UI (generative UI).")));
+        // Обе ревизии: полезная нагрузка у них общая, а клиент, знающий только
+        // 0.9, по одному лишь URI 0.9.1 нас за A2UI-агента не примет.
+        card.capabilities = Map.of("extensions", List.of(
+                Map.of("uri", A2ui.EXTENSION_URI,
+                        "description", "Отдаёт интерфейс через A2UI (generative UI)."),
+                Map.of("uri", A2ui.LEGACY_EXTENSION_URI,
+                        "description", "То же в терминах предыдущей ревизии A2UI.")));
         card.supportedInterfaces = List.of(AgentCard.AgentInterface.jsonrpc(publicUrl + "/invoke"));
         return card;
     }

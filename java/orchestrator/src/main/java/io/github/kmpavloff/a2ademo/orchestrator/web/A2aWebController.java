@@ -1,11 +1,11 @@
 package io.github.kmpavloff.a2ademo.orchestrator.web;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.github.kmpavloff.a2ademo.common.Json;
 import io.github.kmpavloff.a2ademo.common.a2a.A2aMessage;
 import io.github.kmpavloff.a2ademo.common.a2a.A2aTask;
 import io.github.kmpavloff.a2ademo.common.a2a.AgentCard;
-import io.github.kmpavloff.a2ademo.common.a2a.Artifact;
 import io.github.kmpavloff.a2ademo.common.a2a.Part;
 import io.github.kmpavloff.a2ademo.common.a2a.TaskState;
 import io.github.kmpavloff.a2ademo.common.a2a.TaskStatus;
@@ -52,17 +52,46 @@ public class A2aWebController {
     @PostMapping(value = "/invoke", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<JsonRpc.Response> invoke(
             @RequestBody String body,
-            @RequestHeader(value = "A2A-Extensions", required = false) List<String> extensions) {
-        boolean a2uiRequested = extensions != null && extensions.stream()
-                .flatMap(v -> java.util.Arrays.stream(v.split("[,\\s]+")))
-                .anyMatch(uri -> uri.equals(A2ui.EXTENSION_URI));
+            @RequestHeader(value = "A2A-Extensions", required = false) List<String> extensions,
+            @RequestHeader(value = "X-A2A-Extensions", required = false) List<String> legacyExtensions) {
+        // Заголовок приезжает под двумя именами: A2A 1.0 зовёт его
+        // A2A-Extensions, а спека A2UI v0.9 писалась под ранний A2A и знает
+        // только X-A2A-Extensions. Клиент шлёт оба — принимаем любой.
+        String activated = negotiate(extensions);
+        if (activated.isEmpty()) {
+            activated = negotiate(legacyExtensions);
+        }
 
-        JsonRpc.Response response = handle(body, a2uiRequested);
+        JsonRpc.Response response = handle(body, !activated.isEmpty());
         ResponseEntity.BodyBuilder builder = ResponseEntity.ok();
-        if (a2uiRequested && response.error == null) {
-            builder.header("A2A-Extensions", A2ui.EXTENSION_URI);
+        if (!activated.isEmpty() && response.error == null) {
+            // Эхом возвращается ИМЕННО запрошенный URI: клиент на 0.9 ждёт
+            // подтверждения под своим именем ревизии.
+            builder.header("A2A-Extensions", activated);
         }
         return builder.body(response);
+    }
+
+    /**
+     * Какой URI расширения A2UI запросил клиент, или "" — если ни одного.
+     * Значение заголовка бывает списком через запятую, поэтому оно ещё и
+     * разбивается.
+     */
+    static String negotiate(List<String> headerValues) {
+        if (headerValues == null) {
+            return "";
+        }
+        for (String value : headerValues) {
+            if (value == null) {
+                continue;
+            }
+            for (String uri : value.split("[,\\s]+")) {
+                if (uri.equals(A2ui.EXTENSION_URI) || uri.equals(A2ui.LEGACY_EXTENSION_URI)) {
+                    return uri;
+                }
+            }
+        }
+        return "";
     }
 
     private JsonRpc.Response handle(String body, boolean a2uiActive) {
@@ -92,6 +121,12 @@ public class A2aWebController {
             return JsonRpc.Response.fail(req.id, JsonRpc.CODE_INVALID_REQUEST, "message is required");
         }
         A2aMessage message = Json.MAPPER.treeToValue(msgNode, A2aMessage.class);
+        // Дамп этой стороны — то, ради чего A2A_DEBUG вообще включают: без него
+        // видна только половина обмена (оркестратор↔агент из A2aClient), а
+        // разбираться приходится как раз с браузером↔оркестратор. Сериализуем
+        // тем же кодом, что уходит на провод, и молчим, когда дамп выключен —
+        // сборка JSON ради него самого недёшева.
+        dump("сообщение от клиента", message);
 
         // The orchestrator drives every task straight to a terminal state, so a
         // follow-up referencing a taskId has nothing to resume (parity with
@@ -109,8 +144,28 @@ public class A2aWebController {
         task.addHistory(message);
 
         List<Part> parts = executor.execute(task.contextId, message, a2uiActive);
-        task.addArtifact(Artifact.of(parts));
-        task.status = TaskStatus.of(TaskState.COMPLETED, null);
+        // Части ответа — в завершающем сообщении задачи: туда их кладёт спека
+        // расширения A2UI, и оттуда их читает референсный клиент.
+        A2aMessage reply = A2aMessage.forTask(A2aMessage.ROLE_AGENT, task.id, task.contextId,
+                parts.toArray(new Part[0]));
+        dump("ответ клиенту", reply);
+        task.status = TaskStatus.of(TaskState.COMPLETED, reply);
         return JsonRpc.Response.ok(req.id, Map.of("task", task));
+    }
+
+    /**
+     * Печатает сообщение целиком под A2A_DEBUG — тем же кодом, что кладёт его на
+     * провод (JSON-сериализация A2aMessage), а не пересказом полей. Порт
+     * orchExecutor.dump из orchserver.go.
+     */
+    private void dump(String label, A2aMessage message) {
+        if (!trace.debug() || message == null) {
+            return;
+        }
+        try {
+            trace.dump(label, Json.MAPPER.writeValueAsString(message));
+        } catch (JsonProcessingException e) {
+            trace.logf("  ⚠ не удалось сериализовать %s для дампа: %s", label, e.getMessage());
+        }
     }
 }

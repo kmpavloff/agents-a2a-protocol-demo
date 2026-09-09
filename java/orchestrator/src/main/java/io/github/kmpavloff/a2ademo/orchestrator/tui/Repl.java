@@ -80,7 +80,7 @@ public class Repl {
                         System.out.printf("%s  · инструмент → LLM: результат %s, снова спрашиваю LLM%s%n",
                                 GRAY, name, RESET);
                     }
-                });
+                }, false); // терминал виджеты рисует сам, разметка ему не нужна
             } catch (RuntimeException e) {
                 System.out.printf("%s[ошибка] %s%s%n", GRAY, e.getMessage(), RESET);
                 continue;

@@ -58,6 +58,34 @@ public record WorkerProfile(String toolName, String toolDesc, String summary) {
         return "ask_" + slug;
     }
 
+    /**
+     * Профиль агента, описанного в конфиге. Конфиг вытесняет карточку целиком,
+     * включая имя инструмента: у внешнего агента может быть сотня навыков и имя
+     * вроде «Who I Am», непригодное ни для промпта, ни для идентификатора
+     * функции.
+     */
+    public static WorkerProfile fromConfig(String agentId, String agentName, String description,
+                                           AgentCard card, String toolNameOverride) {
+        String name = agentName;
+        if (name.isEmpty() && card != null && card.name != null) {
+            name = card.name;
+        }
+        if (name.isEmpty()) {
+            name = agentId;
+        }
+        String toolName = toolNameOverride.isEmpty() ? "ask_" + slug(agentId) : toolNameOverride;
+        return new WorkerProfile(
+                toolName,
+                "Делегировать запрос удалённому агенту. " + description + " " + NEEDS_INPUT_TAIL,
+                String.format("Агент по имени «%s» умеет: %s", name, description));
+    }
+
+    /** Идентификатор агента в форму, пригодную для имени функции. */
+    static String slug(String id) {
+        String s = id == null ? "" : id.replaceAll("[^a-zA-Z0-9]+", "_").replaceAll("^_+|_+$", "");
+        return s.isEmpty() ? "agent" : s;
+    }
+
     private static String quoteExamples(List<String> examples, String sep) {
         StringBuilder b = new StringBuilder();
         for (int i = 0; i < examples.size(); i++) {
