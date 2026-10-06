@@ -43,6 +43,8 @@ public final class Tracer {
     private final List<Object> sinks = new ArrayList<>(); // PrintStream or Writer
     private final String prefix;
     private final boolean debug;
+    /** Те же обмены с агентами, но для панели в браузере, а не для лога. */
+    private final AgentCallLog calls = new AgentCallLog();
 
     public Tracer(String prefix, Object... sinks) {
         this(prefix, debugEnabled(), sinks);
@@ -70,6 +72,11 @@ public final class Tracer {
             return false;
         }
         return !v.equalsIgnoreCase("0") && !v.equalsIgnoreCase("false");
+    }
+
+    /** Журнал обменов с агентами для панели «A2A-протокол». */
+    public AgentCallLog calls() {
+        return calls;
     }
 
     /** Включён ли дамп тел. Нужен вызывающему, чтобы не собирать дорогой JSON впустую. */

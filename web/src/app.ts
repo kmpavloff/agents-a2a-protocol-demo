@@ -548,6 +548,23 @@ export class OrdersApp extends LitElement {
       border-top: 1px dashed #e1e4e8;
       padding-top: 8px;
     }
+    .agent-call {
+      margin: 8px 0 0 14px;
+      border-left: 2px solid #d0d7de;
+      padding-left: 10px;
+    }
+    .agent-call summary {
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      color: #57606a;
+    }
+    .ac-meta {
+      font-weight: 400;
+      color: #8b949e;
+      margin-left: 6px;
+      overflow-wrap: anywhere;
+    }
     .ex-h {
       font-size: 11px;
       font-weight: 600;
@@ -726,6 +743,22 @@ export class OrdersApp extends LitElement {
                 <pre>${unsafeHTML(highlightJson(e.request))}</pre>
                 <div class="ex-h">← ответ</div>
                 <pre>${unsafeHTML(highlightJson(e.response))}</pre>
+                ${e.agentCalls.map(
+                  (c) => html`<details class="agent-call">
+                    <summary>
+                      ↳ оркестратор → ${c.agentName || c.agentId} · ${c.method || 'POST'}
+                      <span class="ac-meta">
+                        ${c.error ? `ошибка: ${c.error}` : `HTTP ${c.status}`} · ${c.tookMs} мс · ${c.url}
+                      </span>
+                    </summary>
+                    <div class="ex-h">→ запрос агенту</div>
+                    <pre>${unsafeHTML(highlightJson(c.request))}</pre>
+                    ${c.response !== undefined
+                      ? html`<div class="ex-h">← ответ агента</div>
+                          <pre>${unsafeHTML(highlightJson(c.response))}</pre>`
+                      : nothing}
+                  </details>`,
+                )}
               </div>`,
             )}
           </details>`

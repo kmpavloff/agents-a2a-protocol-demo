@@ -6,6 +6,7 @@ import io.github.kmpavloff.a2ademo.common.a2a.AgentCard;
 import io.github.kmpavloff.a2ademo.common.a2a.Part;
 import io.github.kmpavloff.a2ademo.common.a2a.TaskState;
 import io.github.kmpavloff.a2ademo.common.config.AgentConfig;
+import io.github.kmpavloff.a2ademo.common.trace.AgentCallLog;
 import io.github.kmpavloff.a2ademo.common.trace.Tracer;
 import io.github.kmpavloff.a2ademo.orchestrator.a2ui.A2ui;
 import io.github.kmpavloff.a2ademo.orchestrator.a2ui.A2uiIngest;
@@ -296,6 +297,9 @@ public class Remote {
         Instant deadline = Instant.now().plus(cfg.timeoutDuration());
 
         trace.logf("──▶ delegating to agent \"%s\" | session=%s", cfg.id(), sessionId);
+        // По этой метке клиент кладёт обмен в журнал нужной сессии — и
+        // SendMessage, и опросы GetTask.
+        AgentCallLog.Tag tag = new AgentCallLog.Tag(sessionId, cfg.id(), name());
 
         A2aMessage msg;
         if (p != null) {
@@ -328,7 +332,7 @@ public class Remote {
 
         A2aClient.SendResult res;
         try {
-            res = c.sendMessage(msg, a2ui ? List.of(A2ui.EXTENSION_URI, A2ui.LEGACY_EXTENSION_URI) : null);
+            res = c.sendMessage(msg, a2ui ? List.of(A2ui.EXTENSION_URI, A2ui.LEGACY_EXTENSION_URI) : null, tag);
         } catch (A2aClient.A2aException e) {
             trace.logf("    ✖ SendMessage failed: %s", e.getMessage());
             // Сорвавшийся запрос — единственный честный признак, что агент лёг:
@@ -348,7 +352,7 @@ public class Remote {
             }
             return replyFromParts(res.message().parts, null, "");
         }
-        return replyFromTask(sessionId, awaitTerminal(c, res.task(), deadline));
+        return replyFromTask(sessionId, awaitTerminal(c, res.task(), deadline, tag));
     }
 
     /**
@@ -357,7 +361,7 @@ public class Remote {
      * SendMessage. Без неё агент, оставивший задачу в WORKING навсегда, топил
      * бы вызывающий поток без права на восстановление.
      */
-    private A2aTask awaitTerminal(A2aClient c, A2aTask task, Instant deadline) {
+    private A2aTask awaitTerminal(A2aClient c, A2aTask task, Instant deadline, AgentCallLog.Tag tag) {
         while (true) {
             String state = task.status == null ? "" : task.status.state;
             if (!TaskState.WORKING.equals(state) && !TaskState.SUBMITTED.equals(state)) {
@@ -375,7 +379,7 @@ public class Remote {
                 Thread.currentThread().interrupt();
                 throw new A2aClient.A2aException("agent \"" + cfg.id() + "\": interrupted while polling " + task.id);
             }
-            task = c.getTask(task.id);
+            task = c.getTask(task.id, tag);
         }
     }
 

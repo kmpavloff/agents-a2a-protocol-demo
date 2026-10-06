@@ -44,6 +44,8 @@ type Tracer struct {
 	l *log.Logger
 	// debug включает Dump — полные тела запросов и ответов A2A.
 	debug bool
+	// calls — те же обмены с агентами, но для панели в браузере, а не для лога.
+	calls *CallLog
 }
 
 // NewTracer returns a Tracer that writes to w with the given line prefix.
@@ -56,7 +58,17 @@ func NewTracer(w io.Writer, prefix string) *Tracer {
 	return &Tracer{
 		l:     log.New(w, prefix, log.LstdFlags|log.Lmsgprefix),
 		debug: debugEnabled(),
+		calls: NewCallLog(),
 	}
+}
+
+// Calls — журнал обменов с агентами для панели «A2A-протокол». У nil-трейсера
+// журнала нет, и обмены никуда не пишутся.
+func (t *Tracer) Calls() *CallLog {
+	if t == nil {
+		return nil
+	}
+	return t.calls
 }
 
 // debugEnabled читает A2A_DEBUG. Пустое и «0»/«false» — выключено.

@@ -6,6 +6,7 @@ import com.sun.net.httpserver.HttpServer;
 import io.github.kmpavloff.a2ademo.common.Json;
 import io.github.kmpavloff.a2ademo.common.config.AgentConfig;
 import io.github.kmpavloff.a2ademo.common.config.AuthConfig;
+import io.github.kmpavloff.a2ademo.common.trace.AgentCallLog;
 import io.github.kmpavloff.a2ademo.common.trace.Tracer;
 import io.github.kmpavloff.a2ademo.orchestrator.a2ui.A2ui;
 import org.junit.jupiter.api.AfterEach;
@@ -178,6 +179,29 @@ class RemoteTest {
                 + "\"artifacts\":[{\"parts\":[{\"text\":\"готово\"}]}]}}");
         assertEquals("готово", remote(cfg()).ask("s1", "привет", false).text());
         assertEquals("GetTask", seenRequests.get(1).path("method").asText());
+    }
+
+    // Ход оставляет в журнале своей сессии ровно то, что ушло по проводу:
+    // SendMessage с metadata.skill и опрос GetTask, номер карты скрыт.
+    @Test
+    void recordsAgentCallsPerSession() {
+        results.push("{\"task\":{\"id\":\"t1\",\"status\":{\"state\":\"TASK_STATE_WORKING\"}}}");
+        results.addLast("{\"task\":{\"id\":\"t1\",\"status\":{\"state\":\"TASK_STATE_COMPLETED\"}}}");
+        Tracer trace = Tracer.noop();
+        AgentConfig c = new AgentConfig("orders", "Агент заказов", base, "", "shop", false, "", "", AuthConfig.NONE);
+        new Remote(c, trace).ask("s1", "карта 4111 1111 1111 1111", false);
+
+        List<AgentCallLog.Call> calls = trace.calls().since("s1", 0);
+        assertEquals(List.of("SendMessage", "GetTask"), calls.stream().map(AgentCallLog.Call::method).toList());
+        AgentCallLog.Call send = calls.getFirst();
+        assertEquals("orders", send.agentId());
+        assertEquals("Агент заказов", send.agentName());
+        assertEquals(200, send.status());
+        assertEquals("shop", send.request().path("params").path("message").path("metadata").path("skill").asText());
+        assertFalse(send.request().toString().contains("4111"), "номер карты попал в журнал: " + send.request());
+        assertTrue(send.response().has("result"));
+        assertEquals(List.of(), trace.calls().since("s2", 0), "чужая сессия видит обмены");
+        assertEquals(1, trace.calls().since("s1", send.seq()).size(), "after отдаёт только новые");
     }
 
     // Разметку просим только у агента, который объявил её в карточке, и только

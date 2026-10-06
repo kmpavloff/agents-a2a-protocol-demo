@@ -98,6 +98,8 @@ func main() {
 		mux.Handle(a2asrv.WellKnownAgentCardPath, a2asrv.NewStaticAgentCardHandler(a2abridge.OrchestratorCard(cfg.PublicURL)))
 		// Список агентов для селектора в браузере.
 		mux.Handle("/api/agents", webui.AgentsHandler(reg.List))
+		// Обмены оркестратора с агентами — для панели «A2A-протокол».
+		mux.Handle("GET /api/agent-calls", webui.AgentCallsHandler(trace.Calls().Since))
 		// Правка списка агентов из браузера.
 		webui.RegisterAgentConfig(mux, store)
 		// Embedded frontend.

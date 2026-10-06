@@ -408,6 +408,9 @@ func (r *Remote) httpClient() (*http.Client, error) {
 	if strings.EqualFold(r.cfg.Auth.Type, "basic") && r.cfg.Auth.Username != "" {
 		rt = &basicAuthTransport{base: rt, user: r.cfg.Auth.Username, pass: r.cfg.Auth.Password}
 	}
+	if calls := r.trace.Calls(); calls != nil {
+		rt = &callLogTransport{base: rt, log: calls}
+	}
 	rt = &envelopeTransport{base: rt, trace: r.trace}
 	return &http.Client{Transport: rt, Timeout: r.cfg.TimeoutDuration()}, nil
 }
@@ -597,6 +600,9 @@ func (r *Remote) ask(ctx context.Context, sessionID string, outgoing *a2a.Part, 
 
 	ctx, cancel := context.WithTimeout(ctx, r.cfg.TimeoutDuration())
 	defer cancel()
+	// По этой метке транспорт кладёт обмен в журнал нужной сессии — и
+	// SendMessage, и опросы GetTask, которые идут с тем же ctx.
+	ctx = withCallInfo(ctx, sessionID, r.cfg.ID, r.Name())
 
 	// Сказать агенту, что клиент умеет рендерить generative UI: заголовок
 	// расширения (обоими именами, см. withExt) и a2uiClientCapabilities ниже.

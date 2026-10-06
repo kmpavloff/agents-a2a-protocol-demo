@@ -39,6 +39,53 @@ const ROLE_USER = 1;
 export interface TrafficEntry {
   request: any;
   response: any;
+  // Обмены оркестратора с удалёнными агентами за этот ход: браузер их не
+  // видит, оркестратор отдаёт их отдельно через /api/agent-calls.
+  agentCalls: AgentCall[];
+}
+
+/** Один JSON-RPC-обмен оркестратора с агентом — как прошёл по проводу. */
+export interface AgentCall {
+  seq: number;
+  agentId: string;
+  agentName: string;
+  url: string;
+  method: string;
+  request: any;
+  response?: any;
+  status?: number;
+  error?: string;
+  tookMs: number;
+}
+
+// contextIdOf достаёт contextId из ответа /invoke: A2A 1.0 кладёт результат в
+// oneof {task}/{message}, а запрос первого хода contextId ещё не несёт.
+function contextIdOf(request: any, response: any): string | undefined {
+  const r = response?.result;
+  return r?.task?.contextId ?? r?.message?.contextId ?? r?.contextId ?? request?.params?.message?.contextId;
+}
+
+// Последний показанный номер обмена по разговору — чтобы каждый ход забирал
+// только свои обмены с агентами.
+const lastCallSeq = new Map<string, number>();
+
+async function agentCallsFor(
+  fetchFn: typeof window.fetch,
+  contextId: string | undefined,
+): Promise<AgentCall[]> {
+  if (!contextId) return [];
+  const after = lastCallSeq.get(contextId) ?? 0;
+  try {
+    const res = await fetchFn(
+      `/api/agent-calls?contextId=${encodeURIComponent(contextId)}&after=${after}`,
+    );
+    if (!res.ok) return [];
+    const calls = (await res.json()) as AgentCall[];
+    if (calls.length) lastCallSeq.set(contextId, calls[calls.length - 1].seq);
+    return calls;
+  } catch {
+    return []; // панель — вспомогательная, ход из-за неё не ломаем
+  }
 }
 
 let trafficListener: ((e: TrafficEntry) => void) | null = null;
@@ -72,7 +119,10 @@ function installFetchTap() {
       res
         .clone()
         .json()
-        .then((response) => trafficListener?.({request, response}))
+        .then(async (response) => {
+          const agentCalls = await agentCallsFor(orig, contextIdOf(request, response));
+          trafficListener?.({request, response, agentCalls});
+        })
         .catch(() => {});
     }
     return res;

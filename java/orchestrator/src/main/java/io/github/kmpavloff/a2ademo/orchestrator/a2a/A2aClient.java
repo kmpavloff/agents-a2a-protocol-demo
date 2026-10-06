@@ -9,6 +9,7 @@ import io.github.kmpavloff.a2ademo.common.a2a.AgentCard;
 import io.github.kmpavloff.a2ademo.common.config.AgentConfig;
 import io.github.kmpavloff.a2ademo.common.config.AuthConfig;
 import io.github.kmpavloff.a2ademo.common.rpc.JsonRpc;
+import io.github.kmpavloff.a2ademo.common.trace.AgentCallLog;
 import io.github.kmpavloff.a2ademo.common.trace.Tracer;
 import io.github.kmpavloff.a2ademo.orchestrator.a2ui.A2ui;
 
@@ -180,6 +181,11 @@ public class A2aClient {
     public record SendResult(A2aTask task, A2aMessage message) {}
 
     public SendResult sendMessage(A2aMessage message, List<String> extensions) {
+        return sendMessage(message, extensions, null);
+    }
+
+    /** @param tag чей это ход — по нему обмен ложится в журнал панели; null — не записывать */
+    public SendResult sendMessage(A2aMessage message, List<String> extensions, AgentCallLog.Tag tag) {
         ObjectNode params = Json.MAPPER.createObjectNode();
         params.set("message", Json.MAPPER.valueToTree(message));
         // Условие то же, что включает оба заголовка расширения ниже: этим
@@ -198,7 +204,7 @@ public class A2aClient {
         rpc.method = JsonRpc.METHOD_SEND_MESSAGE;
         rpc.params = params;
 
-        JsonNode result = wrapBareResult(call(rpc, extensions));
+        JsonNode result = wrapBareResult(call(rpc, extensions, tag));
         try {
             if (result.has("task")) {
                 return new SendResult(Json.MAPPER.treeToValue(result.get("task"), A2aTask.class), null);
@@ -214,13 +220,17 @@ public class A2aClient {
 
     /** Опрос задачи, пока она в работе: контракт внешнего агента предписывает поллинг. */
     public A2aTask getTask(String taskId) {
+        return getTask(taskId, null);
+    }
+
+    public A2aTask getTask(String taskId, AgentCallLog.Tag tag) {
         ObjectNode params = Json.MAPPER.createObjectNode();
         params.put("id", taskId);
         JsonRpc.Request rpc = new JsonRpc.Request();
         rpc.id = Json.MAPPER.getNodeFactory().numberNode(nextId.getAndIncrement());
         rpc.method = JsonRpc.METHOD_GET_TASK;
         rpc.params = params;
-        JsonNode result = wrapBareResult(call(rpc, null));
+        JsonNode result = wrapBareResult(call(rpc, null, tag));
         try {
             return Json.MAPPER.treeToValue(result.has("task") ? result.get("task") : result, A2aTask.class);
         } catch (IOException e) {
@@ -254,9 +264,10 @@ public class A2aClient {
         return Json.MAPPER.createObjectNode().set(key, result);
     }
 
-    private JsonNode call(JsonRpc.Request rpc, List<String> extensions) {
+    private JsonNode call(JsonRpc.Request rpc, List<String> extensions, AgentCallLog.Tag tag) {
         HttpResponse<String> resp;
-        String body;
+        String body = null;
+        long start = System.nanoTime();
         try {
             body = Json.MAPPER.writeValueAsString(rpc);
             // Тот же случай: битый invokeUrl (mergeEndpoint откатился, но и base
@@ -286,8 +297,10 @@ public class A2aClient {
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
+            record(tag, rpc.method, body, null, e.getMessage(), start);
             throw new A2aException("A2A request to " + invokeUrl + " failed: " + e.getMessage(), e);
         }
+        record(tag, rpc.method, body, resp, null, start);
         if (resp.statusCode() / 100 != 2) {
             throw new A2aException("A2A HTTP " + resp.statusCode() + " from " + invokeUrl);
         }
@@ -307,6 +320,18 @@ public class A2aClient {
         } catch (IOException e) {
             throw new A2aException("A2A response parse error: " + e.getMessage(), e);
         }
+    }
+
+    /** Кладёт обмен в журнал панели «A2A-протокол», если ход помечен. */
+    private void record(AgentCallLog.Tag tag, String method, String sent, HttpResponse<String> resp,
+                        String error, long startNanos) {
+        if (tag == null) {
+            return;
+        }
+        trace.calls().add(tag.session(), new AgentCallLog.Call(0, tag.agentId(), tag.agentName(), invokeUrl,
+                method, AgentCallLog.body(sent), resp == null ? null : AgentCallLog.body(resp.body()),
+                resp == null ? null : resp.statusCode(), error,
+                (System.nanoTime() - startNanos) / 1_000_000));
     }
 
     public static class A2aException extends RuntimeException {
