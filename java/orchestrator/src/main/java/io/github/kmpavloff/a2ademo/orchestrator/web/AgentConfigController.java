@@ -3,6 +3,7 @@ package io.github.kmpavloff.a2ademo.orchestrator.web;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import io.github.kmpavloff.a2ademo.common.config.AgentConfig;
 import io.github.kmpavloff.a2ademo.common.config.AuthConfig;
+import io.github.kmpavloff.a2ademo.common.config.TlsConfig;
 import io.github.kmpavloff.a2ademo.orchestrator.store.AgentStore;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -45,6 +46,7 @@ public class AgentConfigController {
         public String timeout;
         public String description;
         public AuthOut auth = new AuthOut();
+        public TlsJson tls = new TlsJson();
         public boolean hidden;
         public String source;
         public List<String> envLocked = List.of();
@@ -81,11 +83,25 @@ public class AgentConfigController {
         public String timeout = "";
         public String description = "";
         public AuthIn auth = new AuthIn();
+        public TlsJson tls = new TlsJson();
 
         AgentConfig toConfig() {
             return new AgentConfig(id, name, url, cardPath, skill, verbatim, timeout, description,
-                    new AuthConfig(auth.type, auth.username, auth.password));
+                    new AuthConfig(auth.type, auth.username, auth.password),
+                    new TlsConfig(tls.certFile, tls.keyFile, tls.caFile, tls.insecureSkipVerify));
         }
+    }
+
+    /**
+     * Пути к PEM-файлам. Один тип на вход и выход: в нём нет секретов, только
+     * пути на машине оркестратора.
+     */
+    @JsonInclude(JsonInclude.Include.ALWAYS)
+    public static class TlsJson {
+        public String certFile = "";
+        public String keyFile = "";
+        public String caFile = "";
+        public boolean insecureSkipVerify;
     }
 
     public static class AuthIn {
@@ -143,6 +159,10 @@ public class AgentConfigController {
         o.auth.type = a.auth().type();
         o.auth.username = a.auth().username();
         o.auth.hasPassword = r.hasPassword();
+        o.tls.certFile = a.tls().certFile();
+        o.tls.keyFile = a.tls().keyFile();
+        o.tls.caFile = a.tls().caFile();
+        o.tls.insecureSkipVerify = a.tls().insecureSkipVerify();
         o.hidden = r.hidden();
         o.source = r.source();
         o.envLocked = r.envLocked();

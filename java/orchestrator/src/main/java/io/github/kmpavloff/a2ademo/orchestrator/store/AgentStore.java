@@ -2,6 +2,7 @@ package io.github.kmpavloff.a2ademo.orchestrator.store;
 
 import io.github.kmpavloff.a2ademo.common.config.AgentConfig;
 import io.github.kmpavloff.a2ademo.common.config.ConfigLoader;
+import io.github.kmpavloff.a2ademo.common.config.TlsConfig;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -45,7 +46,8 @@ public class AgentStore {
      * Запись для экрана настроек: действующий конфиг агента плюс происхождение.
      * Пароль сюда не попадает никогда — только признак, что он задан.
      *
-     * @param envLocked поля, перекрытые окружением: "url", "password"
+     * @param envLocked поля, перекрытые окружением: "url", "password",
+     *                  "tlsCert", "tlsKey", "tlsCa"
      * @param inFile    есть ли у агента версия в базовом (рукописном) списке.
      *                  {@code source} говорит лишь о наличии overlay-записи, а её
      *                  наличие означает разное для файлового агента с правкой из
@@ -132,7 +134,7 @@ public class AgentStore {
     }
 
     private Record record(AgentConfig a, boolean hidden, boolean fromOverlay) {
-        List<String> envLocked = new ArrayList<>(2);
+        List<String> envLocked = new ArrayList<>(5);
         // Показываем действующее значение, а не то, что лежит в файле: адрес мог
         // быть перекрыт окружением, и правка такого поля ничего не даст.
         String urlEnv = System.getenv(AgentConfig.envVar(a.id(), "URL"));
@@ -146,6 +148,9 @@ public class AgentStore {
             hasPassword = true;
             envLocked.add("password");
         }
+        AgentConfig.TlsEnv tls = AgentConfig.tlsEnv(a.id(), a.tls());
+        a = a.withTls(tls.tls());
+        envLocked.addAll(tls.locked());
         return new Record(a.withPassword(""), hidden, fromOverlay ? SOURCE_UI : SOURCE_FILE,
                 hasPassword, List.copyOf(envLocked), inBase(a.id()));
     }
@@ -219,14 +224,23 @@ public class AgentStore {
             // показывает действующее (env-) значение, и если переносить его в
             // файл как есть, секрет из переменной осел бы открытым текстом на
             // диске, а адрес конкретного контейнера заморозился бы в конфиге.
+            AgentConfig cur = current(id);
             String passEnv = System.getenv(AgentConfig.envVar(id, "PASSWORD"));
             if (a.auth().password().isEmpty() && (passEnv == null || passEnv.isBlank())) {
-                a = a.withPassword(currentPassword(id));
+                a = a.withPassword(cur.auth().password());
             }
-            String urlEnv = System.getenv(AgentConfig.envVar(id, "URL"));
-            if (urlEnv != null && !urlEnv.isBlank()) {
-                a = a.withUrl(currentUrl(id));
+            if (envSet(id, "URL")) {
+                a = a.withUrl(cur.url());
             }
+            // Пути к сертификатам — то же, что адрес: форма прислала
+            // env-значение, а в файл должно лечь прежнее.
+            TlsConfig t = a.tls();
+            TlsConfig c = cur.tls();
+            a = a.withTls(new TlsConfig(
+                    envSet(id, "TLS_CERT") ? c.certFile() : t.certFile(),
+                    envSet(id, "TLS_KEY") ? c.keyFile() : t.keyFile(),
+                    envSet(id, "TLS_CA") ? c.caFile() : t.caFile(),
+                    t.insecureSkipVerify()));
             List<AgentOverride> next = new ArrayList<>(over);
             int i = indexOver(next, id);
             if (i >= 0) {
@@ -238,23 +252,24 @@ public class AgentStore {
         }
     }
 
-    /** Действующий пароль агента — из overlay, иначе из базы. */
-    private String currentPassword(String id) {
+    /**
+     * Запись агента, какой она была в overlay/базе ДО текущей правки. Нужна,
+     * когда поле перекрыто окружением или не прислано формой (пароль): писать в
+     * файл значение, которое форма показала пользователю, нельзя — env-секрет
+     * осел бы на диске, а стенд-специфичный адрес или путь замёрз бы в overlay.
+     */
+    private AgentConfig current(String id) {
         int i = indexOver(over, id);
         if (i >= 0) {
-            return over.get(i).agent().auth().password();
+            return over.get(i).agent();
         }
         return base.stream().filter(a -> a.id().equals(id)).findFirst()
-                .map(a -> a.auth().password()).orElse("");
+                .orElse(new AgentConfig(id, "", "", "", "", false, "", "", null));
     }
 
-    /** Адрес агента, каким он был в overlay/базе ДО текущей правки. */
-    private String currentUrl(String id) {
-        int i = indexOver(over, id);
-        if (i >= 0) {
-            return over.get(i).agent().url();
-        }
-        return base.stream().filter(a -> a.id().equals(id)).findFirst().map(AgentConfig::url).orElse("");
+    private static boolean envSet(String id, String field) {
+        String v = System.getenv(AgentConfig.envVar(id, field));
+        return v != null && !v.isBlank();
     }
 
     /**

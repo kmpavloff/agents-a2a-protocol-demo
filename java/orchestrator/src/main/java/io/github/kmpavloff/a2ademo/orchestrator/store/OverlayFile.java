@@ -2,6 +2,8 @@ package io.github.kmpavloff.a2ademo.orchestrator.store;
 
 import io.github.kmpavloff.a2ademo.common.config.AgentConfig;
 import io.github.kmpavloff.a2ademo.common.config.AuthConfig;
+import io.github.kmpavloff.a2ademo.common.config.ConfigLoader;
+import io.github.kmpavloff.a2ademo.common.config.TlsConfig;
 import org.yaml.snakeyaml.DumperOptions;
 import org.yaml.snakeyaml.Yaml;
 
@@ -56,7 +58,8 @@ public final class OverlayFile {
             out.add(new AgentOverride(new AgentConfig(
                     str(a, "id"), str(a, "name"), str(a, "url"), str(a, "card_path"), str(a, "skill"),
                     Boolean.TRUE.equals(a.get("verbatim")), str(a, "timeout"), str(a, "description"),
-                    new AuthConfig(str(auth, "type"), str(auth, "username"), str(auth, "password"))),
+                    new AuthConfig(str(auth, "type"), str(auth, "username"), str(auth, "password")),
+                    ConfigLoader.tls(a.get("tls") instanceof Map<?, ?> t ? (Map<String, Object>) t : Map.of())),
                     Boolean.TRUE.equals(a.get("hidden"))));
         }
         return List.copyOf(out);
@@ -89,6 +92,19 @@ public final class OverlayFile {
             auth.put("username", a.auth().username());
             auth.put("password", a.auth().password());
             m.put("auth", auth);
+            // Блок tls пишется только когда задан, и только непустые ключи —
+            // как omitempty у Go: overlay обоих оркестраторов выглядит одинаково.
+            TlsConfig t = a.tls();
+            if (t.enabled()) {
+                Map<String, Object> tls = new LinkedHashMap<>();
+                putIf(tls, "cert_file", t.certFile());
+                putIf(tls, "key_file", t.keyFile());
+                putIf(tls, "ca_file", t.caFile());
+                if (t.insecureSkipVerify()) {
+                    tls.put("insecure_skip_verify", true);
+                }
+                m.put("tls", tls);
+            }
             if (o.hidden()) {
                 m.put("hidden", true);
             }
@@ -129,6 +145,12 @@ public final class OverlayFile {
                     // временный файл останется — на работу это не влияет
                 }
             }
+        }
+    }
+
+    private static void putIf(Map<String, Object> m, String key, String v) {
+        if (!v.isEmpty()) {
+            m.put(key, v);
         }
     }
 

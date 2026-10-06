@@ -2,6 +2,7 @@ package io.github.kmpavloff.a2ademo.orchestrator.store;
 
 import io.github.kmpavloff.a2ademo.common.config.AgentConfig;
 import io.github.kmpavloff.a2ademo.common.config.AuthConfig;
+import io.github.kmpavloff.a2ademo.common.config.TlsConfig;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -11,6 +12,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -41,6 +43,25 @@ class OverlayFileTest {
 
         List<AgentOverride> back = OverlayFile.load(p);
         assertEquals(over, back);
+    }
+
+    // Блок tls пишется только когда задан и только непустыми ключами — как
+    // omitempty у Go, чтобы overlay обоих оркестраторов выглядел одинаково.
+    @Test
+    void roundTripsTlsPaths(@TempDir Path dir) throws IOException {
+        Path p = dir.resolve("agents.local.yaml");
+        List<AgentOverride> over = List.of(
+                new AgentOverride(new AgentConfig("o", "", "https://x", "", "", false, "", "", AuthConfig.NONE,
+                        new TlsConfig("/c.crt", "/c.key", "", true)), false),
+                new AgentOverride(new AgentConfig("p", "", "http://y", "", "", false, "", "", AuthConfig.NONE), false));
+
+        OverlayFile.save(p, over);
+
+        String yaml = Files.readString(p);
+        assertTrue(yaml.contains("cert_file: /c.crt") && yaml.contains("insecure_skip_verify: true"), yaml);
+        assertFalse(yaml.contains("ca_file"), "пустые ключи не пишутся: " + yaml);
+        assertEquals(1, yaml.split("tls:", -1).length - 1, "блок tls только у агента, где он задан: " + yaml);
+        assertEquals(over, OverlayFile.load(p));
     }
 
     @Test

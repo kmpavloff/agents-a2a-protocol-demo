@@ -44,29 +44,42 @@ public class A2aClient {
     private final AuthConfig auth;
     private final Tracer trace;
 
-    private A2aClient(String invokeUrl, Duration timeout, AuthConfig auth, Tracer trace) {
+    private A2aClient(String invokeUrl, Duration timeout, AuthConfig auth, HttpClient http, Tracer trace) {
         this.invokeUrl = invokeUrl;
         this.timeout = timeout;
         this.auth = auth;
         this.trace = trace;
-        this.http = HttpClient.newBuilder()
+        this.http = http;
+    }
+
+    /**
+     * HTTP-клиент агента: HTTP/1.1 (см. поле http) и, если заданы,
+     * клиентский сертификат и доверие к серверу. Один на карточку и на
+     * JSON-RPC: сертификат нужен обоим.
+     */
+    private static HttpClient httpClient(AgentConfig cfg) {
+        HttpClient.Builder b = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
-                .version(HttpClient.Version.HTTP_1_1)
-                .build();
+                .version(HttpClient.Version.HTTP_1_1);
+        if (cfg.tls().enabled()) {
+            try {
+                b.sslContext(cfg.tls().sslContext());
+            } catch (IllegalArgumentException e) {
+                throw new A2aException("agent \"" + cfg.id() + "\": " + e.getMessage(), e);
+            }
+        }
+        return b.build();
     }
 
     /** Читает карточку по адресу и пути из конфига и строит клиента её JSONRPC-интерфейса. */
     public static Resolved resolve(AgentConfig cfg, Tracer trace) {
         String base = cfg.url().endsWith("/") ? cfg.url().substring(0, cfg.url().length() - 1) : cfg.url();
         String cardPath = cfg.cardPath().isEmpty() ? AgentConfig.DEFAULT_CARD_PATH : cfg.cardPath();
+        // Та же причина закрепить HTTP/1.1, что и у поля http выше: без неё JDK
+        // шлёт h2c-апгрейд и на запрос за карточкой агента.
+        HttpClient http = httpClient(cfg);
         AgentCard card;
         try {
-            // Та же причина закрепить HTTP/1.1, что и у поля http выше:
-            // без неё JDK шлёт h2c-апгрейд и на запрос за карточкой агента.
-            HttpClient http = HttpClient.newBuilder()
-                    .connectTimeout(Duration.ofSeconds(10))
-                    .version(HttpClient.Version.HTTP_1_1)
-                    .build();
             // URI.create бросает непроверяемое IllegalArgumentException, которое
             // соседний catch (IOException | InterruptedException) не поймает —
             // заворачиваем сразу, чтобы вызывающий код видел A2aException, как и
@@ -110,7 +123,7 @@ public class A2aClient {
             // адресу из конфига, как это делает Go.
             url = base;
         }
-        return new Resolved(card, new A2aClient(url, cfg.timeoutDuration(), cfg.auth(), trace));
+        return new Resolved(card, new A2aClient(url, cfg.timeoutDuration(), cfg.auth(), http, trace));
     }
 
     /**

@@ -6,7 +6,8 @@
 # The real `configs/orchestrator.yaml` is gitignored because it holds your API key.
 # Env-var overrides (see internal/config): ORCHESTRATOR_LISTEN_ADDR,
 # ORCHESTRATOR_PUBLIC_URL, WORKER_URL, A2A_LOG_PATH, LLM_BASE_URL, LLM_MODEL,
-# LLM_API_KEY, A2A_AGENT_<ID>_URL, A2A_AGENT_<ID>_PASSWORD.
+# LLM_API_KEY, A2A_AGENT_<ID>_URL, A2A_AGENT_<ID>_PASSWORD,
+# A2A_AGENT_<ID>_TLS_CERT, A2A_AGENT_<ID>_TLS_KEY, A2A_AGENT_<ID>_TLS_CA.
 #
 # listen_addr/public_url are used only in --web mode (A2A server + embedded frontend).
 listen_addr: ":8080"
@@ -48,6 +49,18 @@ agents:
   #     username: ouroboros
   #     # Пароль можно не хранить в файле: A2A_AGENT_OUROBOROS_PASSWORD=…
   #     password: test
+  #   # Клиентский сертификат (mTLS) — для агента за https:// с проверкой
+  #   # клиента. Сочетается с auth выше. Хранятся только пути к PEM-файлам;
+  #   # в контейнере их перекрывают A2A_AGENT_<ID>_TLS_CERT/_TLS_KEY/_TLS_CA.
+  #   # Java-порт читает только PKCS#8-ключи (BEGIN PRIVATE KEY).
+  #   tls:
+  #     cert_file: "configs/certs/ouroboros-client.crt"
+  #     key_file: "configs/certs/ouroboros-client.key"
+  #     # CA сервера; пусто — системные корни. Сертификат на голый IP должен
+  #     # содержать этот IP в subjectAltName.
+  #     ca_file: "configs/certs/ouroboros-ca.crt"
+  #     # Только для стенда: не проверять сертификат сервера вовсе.
+  #     insecure_skip_verify: false
 
 # `worker_url` — исторический одиночный агент. Он работает ТОЛЬКО когда список
 # `agents` пуст (тогда из него синтезируется запись `orders`), поэтому здесь его

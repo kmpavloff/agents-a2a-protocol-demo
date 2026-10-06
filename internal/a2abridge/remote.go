@@ -390,15 +390,26 @@ func (r *Remote) SetToolName(name string) {
 	}
 }
 
-// httpClient собирает HTTP-клиент агента: таймаут из конфига плюс Basic-auth,
-// если он задан.
-func (r *Remote) httpClient() *http.Client {
+// httpClient собирает HTTP-клиент агента: таймаут из конфига, клиентский
+// сертификат (mTLS) и Basic-auth, если они заданы.
+func (r *Remote) httpClient() (*http.Client, error) {
 	var rt http.RoundTripper = http.DefaultTransport
+	if r.cfg.TLS.Enabled() {
+		tc, err := r.cfg.TLS.ClientConfig()
+		if err != nil {
+			return nil, err
+		}
+		// Клон, а не правка DefaultTransport: прокси, таймауты и пул
+		// соединений остаются прежними, а сертификат не утекает к другим агентам.
+		t := http.DefaultTransport.(*http.Transport).Clone()
+		t.TLSClientConfig = tc
+		rt = t
+	}
 	if strings.EqualFold(r.cfg.Auth.Type, "basic") && r.cfg.Auth.Username != "" {
 		rt = &basicAuthTransport{base: rt, user: r.cfg.Auth.Username, pass: r.cfg.Auth.Password}
 	}
 	rt = &envelopeTransport{base: rt, trace: r.trace}
-	return &http.Client{Transport: rt, Timeout: r.cfg.TimeoutDuration()}
+	return &http.Client{Transport: rt, Timeout: r.cfg.TimeoutDuration()}, nil
 }
 
 // Connect резолвит AgentCard и создаёт клиента. Идемпотентен; после неудачи
@@ -417,7 +428,11 @@ func (r *Remote) Connect(ctx context.Context) error {
 	r.probed = true
 	r.mu.Unlock()
 
-	hc := r.httpClient()
+	hc, err := r.httpClient()
+	if err != nil {
+		r.markUnavailable()
+		return fmt.Errorf("http client for %q: %w", r.cfg.ID, err)
+	}
 	resolver := &agentcard.Resolver{Client: hc, CardParser: tolerantCardParser(r.trace)}
 	card, err := resolver.Resolve(ctx, r.cfg.URL, agentcard.WithPath(r.cfg.CardPath))
 	if err != nil {

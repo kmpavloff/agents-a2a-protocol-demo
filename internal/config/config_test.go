@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/testcerts"
 )
 
 func writeTemp(t *testing.T, body string) string {
@@ -245,5 +247,67 @@ llm:
 	}
 	if cfg.Agents[0].URL != "http://worker:8081" {
 		t.Errorf("url from env: got %q", cfg.Agents[0].URL)
+	}
+}
+
+func TestValidateAgentTLS(t *testing.T) {
+	certs := testcerts.New(t)
+	good := TLSConfig{CertFile: certs.ClientCert, KeyFile: certs.ClientKey, CAFile: certs.CAFile}
+	cases := map[string]struct {
+		a  AgentConfig
+		ok bool
+	}{
+		"полный mTLS":            {AgentConfig{ID: "o", URL: "https://x", TLS: good}, true},
+		"только skip-verify":     {AgentConfig{ID: "o", URL: "https://x", TLS: TLSConfig{InsecureSkipVerify: true}}, true},
+		"tls по http://":         {AgentConfig{ID: "o", URL: "http://x", TLS: good}, false},
+		"cert без key":           {AgentConfig{ID: "o", URL: "https://x", TLS: TLSConfig{CertFile: certs.ClientCert}}, false},
+		"нет файла":              {AgentConfig{ID: "o", URL: "https://x", TLS: TLSConfig{CertFile: "/nope.crt", KeyFile: "/nope.key"}}, false},
+		"ca_file не PEM":         {AgentConfig{ID: "o", URL: "https://x", TLS: TLSConfig{CAFile: writeTemp(t, "мусор")}}, false},
+		"ключ от сертификата CA": {AgentConfig{ID: "o", URL: "https://x", TLS: TLSConfig{CertFile: certs.CAFile, KeyFile: certs.ClientKey}}, false},
+	}
+	for name, c := range cases {
+		err := ValidateAgent(c.a)
+		if (err == nil) != c.ok {
+			t.Errorf("%s: err=%v, ожидалось ok=%v", name, err, c.ok)
+		}
+	}
+}
+
+// Пути к сертификатам перекрываются окружением, как и адрес: в контейнере
+// файлы смонтированы в другое место.
+func TestNormalizeAgentsAppliesTLSEnv(t *testing.T) {
+	certs := testcerts.New(t)
+	t.Setenv("A2A_AGENT_O_TLS_CERT", certs.ClientCert)
+	t.Setenv("A2A_AGENT_O_TLS_KEY", certs.ClientKey)
+	agents := []AgentConfig{{ID: "o", URL: "https://x", TLS: TLSConfig{CertFile: "/nope.crt", KeyFile: "/nope.key"}}}
+	if err := NormalizeAgents(agents); err != nil {
+		t.Fatalf("NormalizeAgents: %v", err)
+	}
+	if agents[0].TLS.CertFile != certs.ClientCert || agents[0].TLS.KeyFile != certs.ClientKey {
+		t.Errorf("env-перекрытие TLS не применено: %+v", agents[0].TLS)
+	}
+}
+
+func TestLoadOrchestratorParsesTLS(t *testing.T) {
+	certs := testcerts.New(t)
+	p := writeTemp(t, `
+agents:
+  - id: ouroboros
+    url: "https://127.0.0.1:18800"
+    tls:
+      cert_file: "`+certs.ClientCert+`"
+      key_file: "`+certs.ClientKey+`"
+      ca_file: "`+certs.CAFile+`"
+      insecure_skip_verify: true
+llm:
+  base_url: "http://localhost:1234/v1"
+`)
+	cfg, err := LoadOrchestrator(p)
+	if err != nil {
+		t.Fatalf("LoadOrchestrator: %v", err)
+	}
+	want := TLSConfig{CertFile: certs.ClientCert, KeyFile: certs.ClientKey, CAFile: certs.CAFile, InsecureSkipVerify: true}
+	if cfg.Agents[0].TLS != want {
+		t.Errorf("tls: got %+v", cfg.Agents[0].TLS)
 	}
 }

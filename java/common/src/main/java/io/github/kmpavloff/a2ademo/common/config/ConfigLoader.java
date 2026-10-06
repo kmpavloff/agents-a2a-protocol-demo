@@ -99,9 +99,16 @@ public final class ConfigLoader {
                     str(a, "card_path", ""), str(a, "skill", ""),
                     Boolean.TRUE.equals(a.get("verbatim")),
                     str(a, "timeout", ""), str(a, "description", ""),
-                    new AuthConfig(str(auth, "type", ""), str(auth, "username", ""), str(auth, "password", ""))));
+                    new AuthConfig(str(auth, "type", ""), str(auth, "username", ""), str(auth, "password", "")),
+                    tls(section(a, "tls"))));
         }
         return out;
+    }
+
+    /** Блок tls: агента — общий разбор для orchestrator.yaml и overlay. */
+    public static TlsConfig tls(Map<String, Object> t) {
+        return new TlsConfig(str(t, "cert_file", ""), str(t, "key_file", ""), str(t, "ca_file", ""),
+                Boolean.TRUE.equals(t.get("insecure_skip_verify")));
     }
 
     /**
@@ -119,6 +126,9 @@ public final class ConfigLoader {
             if (urlEnv != null && !urlEnv.isBlank()) {
                 a = a.withUrl(urlEnv);
             }
+            // Пути к сертификатам — по той же причине: в контейнере файлы
+            // монтируются в другое место.
+            a = a.withTlsEnv();
             AgentConfig.validate(a);
             if (!seen.add(a.id())) {
                 throw new IllegalStateException("orchestrator config: duplicate agent id \"" + a.id() + "\"");

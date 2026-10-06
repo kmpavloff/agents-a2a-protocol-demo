@@ -22,6 +22,7 @@ type agentOut struct {
 	Timeout     string   `json:"timeout"`
 	Description string   `json:"description"`
 	Auth        authOut  `json:"auth"`
+	TLS         tlsJSON  `json:"tls"`
 	Hidden      bool     `json:"hidden"`
 	Source      string   `json:"source"`
 	EnvLocked   []string `json:"envLocked"`
@@ -41,6 +42,25 @@ type authOut struct {
 	HasPassword bool   `json:"hasPassword"`
 }
 
+// tlsJSON — пути к PEM-файлам. Один тип на вход и выход: в нём нет секретов,
+// только пути на машине оркестратора.
+type tlsJSON struct {
+	CertFile           string `json:"certFile"`
+	KeyFile            string `json:"keyFile"`
+	CAFile             string `json:"caFile"`
+	InsecureSkipVerify bool   `json:"insecureSkipVerify"`
+}
+
+func (t tlsJSON) toConfig() config.TLSConfig {
+	return config.TLSConfig{CertFile: t.CertFile, KeyFile: t.KeyFile, CAFile: t.CAFile,
+		InsecureSkipVerify: t.InsecureSkipVerify}
+}
+
+func tlsOut(t config.TLSConfig) tlsJSON {
+	return tlsJSON{CertFile: t.CertFile, KeyFile: t.KeyFile, CAFile: t.CAFile,
+		InsecureSkipVerify: t.InsecureSkipVerify}
+}
+
 // agentIn — то, что присылает форма. Пустой password означает «не менять»:
 // прочитать текущий браузер не может, и форма шлёт пустое поле каждый раз,
 // когда пароль не трогали.
@@ -58,6 +78,7 @@ type agentIn struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	} `json:"auth"`
+	TLS tlsJSON `json:"tls"`
 }
 
 func (in agentIn) toConfig() config.AgentConfig {
@@ -68,6 +89,7 @@ func (in agentIn) toConfig() config.AgentConfig {
 		Auth: config.AuthConfig{
 			Type: in.Auth.Type, Username: in.Auth.Username, Password: in.Auth.Password,
 		},
+		TLS: in.TLS.toConfig(),
 	}
 }
 
@@ -83,6 +105,7 @@ func toOut(r agentstore.Record) agentOut {
 		Auth: authOut{
 			Type: r.Auth.Type, Username: r.Auth.Username, HasPassword: r.HasPassword,
 		},
+		TLS:    tlsOut(r.TLS),
 		Hidden: r.Hidden, Source: r.Source, EnvLocked: locked,
 		CanReset: r.InFile && r.Source == agentstore.SourceUI,
 	}

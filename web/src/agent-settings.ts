@@ -12,12 +12,21 @@ interface AgentConfig {
   timeout: string;
   description: string;
   auth: {type: string; username: string; hasPassword: boolean};
+  // Пути к PEM-файлам на машине оркестратора — сами файлы через API не ходят.
+  tls: TlsConfig;
   hidden: boolean;
   source: 'file' | 'ui';
   envLocked: string[];
   // Есть ли базовая версия в orchestrator.yaml. У агента, целиком заведённого
   // через UI, её нет — «Сбросить к конфигу» для него означало бы удаление.
   canReset: boolean;
+}
+
+interface TlsConfig {
+  certFile: string;
+  keyFile: string;
+  caFile: string;
+  insecureSkipVerify: boolean;
 }
 
 /** Живой статус из GET /api/agents — им же питается селектор в чате. */
@@ -37,6 +46,7 @@ const EMPTY: Draft = {
   id: '', name: '', url: '', cardPath: '', skill: '', verbatim: false,
   timeout: '', description: '',
   auth: {type: '', username: '', hasPassword: false},
+  tls: {certFile: '', keyFile: '', caFile: '', insecureSkipVerify: false},
   hidden: false, source: 'ui', envLocked: [], canReset: false, password: '', isNew: true,
 };
 
@@ -77,12 +87,12 @@ export class AgentSettings extends LitElement {
   }
 
   #edit(a: AgentConfig) {
-    this._draft = {...a, auth: {...a.auth}, password: '', isNew: false};
+    this._draft = {...a, auth: {...a.auth}, tls: {...a.tls}, password: '', isNew: false};
     this._error = '';
   }
 
   #add() {
-    this._draft = {...EMPTY, auth: {...EMPTY.auth}};
+    this._draft = {...EMPTY, auth: {...EMPTY.auth}, tls: {...EMPTY.tls}};
     this._error = '';
   }
 
@@ -126,6 +136,7 @@ export class AgentSettings extends LitElement {
       id: d.id, name: d.name, url: d.url, cardPath: d.cardPath, skill: d.skill,
       verbatim: d.verbatim, timeout: d.timeout, description: d.description,
       auth: {type: d.auth.type, username: d.auth.username, password: d.password},
+      tls: d.tls,
     };
     const ok = d.isNew
       ? await this.#send('POST', '/api/agents/config', body)
@@ -254,6 +265,13 @@ export class AgentSettings extends LitElement {
       background: #f0f1f3;
       color: #8b949e;
     }
+    h4 {
+      margin: 18px 0 2px;
+      font-size: 14px;
+    }
+    .hint.warn {
+      color: #9a6700;
+    }
     .hint {
       font-size: 12px;
       color: #8b949e;
@@ -325,6 +343,44 @@ export class AgentSettings extends LitElement {
             </span>`
           : nothing}
     </div>`;
+  }
+
+  /**
+   * Клиентский сертификат. Отдельно от «Аутентификации»: mTLS — свойство
+   * транспорта и сочетается с Basic, а не заменяет его.
+   */
+  #renderTls(d: Draft) {
+    const path = (id: string, label: string, key: 'certFile' | 'keyFile' | 'caFile',
+        lock: string, placeholder: string) => {
+      const locked = d.envLocked.includes(lock);
+      return html`
+        <label for=${id}>${label}</label>
+        <input id=${id} type="text" .value=${d.tls[key]} ?disabled=${locked}
+          placeholder=${placeholder}
+          @input=${(e: Event) =>
+            this.#patch({tls: {...d.tls, [key]: (e.target as HTMLInputElement).value}})} />
+        ${locked ? html`<div class="hint">Перекрыто переменной окружения.</div>` : nothing}`;
+    };
+    return html`
+      <h4>Клиентский сертификат (mTLS)</h4>
+      <div class="hint">
+        Пути к PEM-файлам на машине оркестратора; сами файлы через браузер не
+        передаются. Работает только с адресом https://.
+      </div>
+      ${path('f-tls-cert', 'Сертификат', 'certFile', 'tlsCert', 'configs/certs/client.crt')}
+      ${path('f-tls-key', 'Приватный ключ', 'keyFile', 'tlsKey', 'configs/certs/client.key')}
+      ${path('f-tls-ca', 'CA сервера', 'caFile', 'tlsCa', 'пусто — системные корни')}
+      <div class="check">
+        <input id="f-tls-insecure" type="checkbox" .checked=${d.tls.insecureSkipVerify}
+          @change=${(e: Event) =>
+            this.#patch({tls: {...d.tls, insecureSkipVerify: (e.target as HTMLInputElement).checked}})} />
+        <label for="f-tls-insecure" style="margin:0">Не проверять сертификат сервера</label>
+      </div>
+      ${d.tls.insecureSkipVerify
+        ? html`<div class="hint warn">
+            Подменить агента сможет любой в сети. Только для стенда, когда CA нет под рукой.
+          </div>`
+        : nothing}`;
   }
 
   #renderForm(d: Draft) {
@@ -417,6 +473,8 @@ export class AgentSettings extends LitElement {
             </div>
           `
         : nothing}
+
+      ${this.#renderTls(d)}
 
       ${this._error ? html`<p class="error">${this._error}</p>` : nothing}
 

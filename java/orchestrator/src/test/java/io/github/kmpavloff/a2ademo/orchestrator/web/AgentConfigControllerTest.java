@@ -8,6 +8,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
+import java.net.URISyntaxException;
 import java.nio.file.Path;
 import java.util.List;
 
@@ -60,6 +61,32 @@ class AgentConfigControllerTest {
         AgentConfigController c = controller(dir);
         assertEquals(HttpStatus.CREATED, c.create(in("shop", "http://b")).getStatusCode());
         assertEquals(HttpStatus.CONFLICT, c.create(in("shop", "http://b")).getStatusCode());
+    }
+
+    // Пути mTLS ходят через форму туда и обратно; битый путь — это 400 при
+    // сохранении, а не сюрприз при первом запросе к агенту.
+    @Test
+    void tlsPathsRoundTripAndBrokenOnesAreRejected(@TempDir Path dir) throws URISyntaxException {
+        AgentConfigController c = controller(dir);
+        AgentConfigController.AgentIn a = in("shop", "https://localhost:9100");
+        a.tls.certFile = fixture("client.crt");
+        a.tls.keyFile = fixture("client.key");
+        a.tls.caFile = fixture("ca.crt");
+        a.tls.insecureSkipVerify = true;
+        assertEquals(HttpStatus.CREATED, c.create(a).getStatusCode());
+
+        AgentConfigController.AgentOut out = c.list().get(1);
+        assertEquals(a.tls.certFile, out.tls.certFile);
+        assertEquals(a.tls.keyFile, out.tls.keyFile);
+        assertEquals(a.tls.caFile, out.tls.caFile);
+        assertTrue(out.tls.insecureSkipVerify);
+
+        a.tls.certFile = "/нет/такого.crt";
+        assertEquals(HttpStatus.BAD_REQUEST, c.update("shop", a).getStatusCode());
+    }
+
+    private static String fixture(String name) throws URISyntaxException {
+        return Path.of(AgentConfigControllerTest.class.getResource("/tls/" + name).toURI()).toString();
     }
 
     @Test

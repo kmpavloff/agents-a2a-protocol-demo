@@ -83,7 +83,9 @@ type Record struct {
 	Hidden      bool
 	Source      string // SourceFile или SourceUI
 	HasPassword bool
-	EnvLocked   []string // поля, перекрытые окружением: "url", "password"
+	// EnvLocked — поля, перекрытые окружением: "url", "password", "tlsCert",
+	// "tlsKey", "tlsCa".
+	EnvLocked []string
 	// InFile — есть ли у агента версия в базовом (рукописном) списке. Source
 	// говорит лишь о том, есть ли overlay-запись, а её наличие означает разное
 	// для двух разных сущностей: файловый агент с правкой из UI (сброс вернёт
@@ -177,6 +179,7 @@ func (s *Store) Records() []Record {
 			r.HasPassword = true
 			r.EnvLocked = append(r.EnvLocked, "password")
 		}
+		r.EnvLocked = append(r.EnvLocked, config.ApplyTLSEnv(a.ID, &r.TLS)...)
 		r.Auth.Password = "" // наружу пароль не уходит никогда
 		out = append(out, r)
 	}
@@ -275,11 +278,26 @@ func (s *Store) Update(id string, a config.AgentConfig) error {
 	// есть, секрет из переменной окружения осел бы открытым текстом на диске, а
 	// адрес конкретного контейнера заморозился бы в конфиге стенда. Слияние
 	// всё равно даст env последнее слово — важно только, что уходит на диск.
+	cur := s.current(id)
 	if a.Auth.Password == "" && os.Getenv(config.AgentEnvVar(id, "PASSWORD")) == "" {
-		a.Auth.Password = s.currentPassword(id)
+		a.Auth.Password = cur.Auth.Password
 	}
 	if os.Getenv(config.AgentEnvVar(id, "URL")) != "" {
-		a.URL = s.currentURL(id)
+		a.URL = cur.URL
+	}
+	// Пути к сертификатам — то же, что адрес: форма прислала env-значение,
+	// а в файл должно лечь прежнее.
+	for _, f := range []struct {
+		env      string
+		dst, src *string
+	}{
+		{"TLS_CERT", &a.TLS.CertFile, &cur.TLS.CertFile},
+		{"TLS_KEY", &a.TLS.KeyFile, &cur.TLS.KeyFile},
+		{"TLS_CA", &a.TLS.CAFile, &cur.TLS.CAFile},
+	} {
+		if os.Getenv(config.AgentEnvVar(id, f.env)) != "" {
+			*f.dst = *f.src
+		}
 	}
 	over := slices.Clone(s.over)
 	if i := indexOver(over, id); i >= 0 {
@@ -290,34 +308,21 @@ func (s *Store) Update(id string, a config.AgentConfig) error {
 	return s.apply(over)
 }
 
-// currentPassword достаёт действующий пароль агента — из overlay, иначе из базы.
-func (s *Store) currentPassword(id string) string {
+// current достаёт запись агента, какой она была в overlay/базе ДО текущей
+// правки, — из overlay, иначе из базы. Нужна, когда поле перекрыто
+// окружением или не прислано формой (пароль): писать в файл значение, которое
+// форма показала пользователю, нельзя — env-секрет осел бы на диске, а
+// стенд-специфичный адрес или путь замёрз бы в overlay навсегда.
+func (s *Store) current(id string) config.AgentConfig {
 	if i := indexOver(s.over, id); i >= 0 {
-		return s.over[i].Auth.Password
+		return s.over[i].AgentConfig
 	}
 	for _, b := range s.base {
 		if b.ID == id {
-			return b.Auth.Password
+			return b
 		}
 	}
-	return ""
-}
-
-// currentURL достаёт адрес агента, каким он был в overlay/базе ДО текущей
-// правки, — из overlay, иначе из базы. Нужен, когда адрес перекрыт
-// окружением: писать в файл значение, которое форма показала пользователю
-// (оно и есть env-значение), нельзя — иначе стенд-специфичный адрес
-// заморозится в overlay навсегда.
-func (s *Store) currentURL(id string) string {
-	if i := indexOver(s.over, id); i >= 0 {
-		return s.over[i].URL
-	}
-	for _, b := range s.base {
-		if b.ID == id {
-			return b.URL
-		}
-	}
-	return ""
+	return config.AgentConfig{}
 }
 
 // Delete убирает агента. Заведённый через UI исчезает совсем, пришедший из

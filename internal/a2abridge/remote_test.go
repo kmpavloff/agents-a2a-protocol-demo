@@ -2,6 +2,7 @@ package a2abridge
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"io"
 	"net"
@@ -15,6 +16,7 @@ import (
 	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/a2ui"
 	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/config"
 	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/llm"
+	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/testcerts"
 )
 
 // ouroborosStub отвечает ровно как внешний агент: карточка по своему пути,
@@ -49,12 +51,23 @@ const stubCompleted = `{"jsonrpc":"2.0","id":"1","result":{"id":"t1","contextId"
 
 func startOuroborosStub(t *testing.T, workOnce bool) *ouroborosStub {
 	t.Helper()
+	return startOuroborosStubTLS(t, workOnce, nil)
+}
+
+// startOuroborosStubTLS — та же заглушка, но за TLS, если tc задан: так
+// проверяется mTLS-путь целиком, от карточки до SendMessage.
+func startOuroborosStubTLS(t *testing.T, workOnce bool, tc *tls.Config) *ouroborosStub {
+	t.Helper()
 	s := &ouroborosStub{workOnce: workOnce}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.URL = "http://" + ln.Addr().String()
+	if tc != nil {
+		ln = tls.NewListener(ln, tc)
+		s.URL = "https://" + ln.Addr().String()
+	}
 
 	authed := func(w http.ResponseWriter, r *http.Request) bool {
 		u, p, ok := r.BasicAuth()
@@ -204,6 +217,37 @@ func TestRemotePollsWhileWorking(t *testing.T) {
 	}
 	if got := s.request(t, 1)["method"]; got != "GetTask" {
 		t.Errorf("expected a GetTask poll, got %v", got)
+	}
+}
+
+// Агент за mTLS: без клиентского сертификата рукопожатие рвётся, с ним
+// проходит весь ход — карточка, SendMessage, разбор ответа.
+func TestRemoteMutualTLS(t *testing.T) {
+	certs := testcerts.New(t)
+	s := startOuroborosStubTLS(t, false, certs.Server)
+	full := config.TLSConfig{CertFile: certs.ClientCert, KeyFile: certs.ClientKey, CAFile: certs.CAFile}
+
+	cases := map[string]struct {
+		tls config.TLSConfig
+		ok  bool
+	}{
+		"сертификат и CA":                 {full, true},
+		"сертификат и skip-verify без CA": {config.TLSConfig{CertFile: certs.ClientCert, KeyFile: certs.ClientKey, InsecureSkipVerify: true}, true},
+		"без клиентского сертификата":     {config.TLSConfig{CAFile: certs.CAFile}, false},
+		"сертификат, но чужой CA сервера": {config.TLSConfig{CertFile: certs.ClientCert, KeyFile: certs.ClientKey}, false},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := ouroborosCfg(s.URL)
+			cfg.TLS = c.tls
+			reply, err := NewRemote(cfg, nil).Ask(context.Background(), "sess-1", "привет")
+			if (err == nil) != c.ok {
+				t.Fatalf("err=%v, ожидалось ok=%v", err, c.ok)
+			}
+			if c.ok && reply.Text != "Заказ доставлен" {
+				t.Errorf("text: %q", reply.Text)
+			}
+		})
 	}
 }
 

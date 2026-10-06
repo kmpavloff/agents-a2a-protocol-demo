@@ -153,6 +153,7 @@ environment variable (handy for CI or for keeping the key out of files entirely)
 | `ORDER_LINK_BASE` | `https://shop.example.com/orders` | Base URL for order-card links in widgets (`<base>/<id>`) |
 | `A2A_AGENT_<ID>_URL` | — | Base URL of the agent with that `id` (e.g. `A2A_AGENT_ORDERS_URL`) — what Docker Compose uses to point the orchestrator at the worker container |
 | `A2A_AGENT_<ID>_PASSWORD` | — | Basic-auth password for the agent with that `id` (e.g. `A2A_AGENT_OUROBOROS_PASSWORD`), so the secret can stay out of the config file |
+| `A2A_AGENT_<ID>_TLS_CERT` / `_TLS_KEY` / `_TLS_CA` | — | Paths to the mTLS client certificate, its key and the server CA for the agent with that `id` — for containers, where the PEM files are mounted elsewhere |
 
 > **WSL2 + LM Studio on Windows.** If you run the agents inside WSL2 while LM Studio
 > runs on the Windows host, `http://localhost:1234` usually does **not** reach it
@@ -301,6 +302,25 @@ agents:
     auth: {type: basic, username: ouroboros, password: test}
 ```
 
+**Mutual TLS.** An agent behind mTLS gets a `tls:` block next to `auth:` — they
+combine, mTLS does not replace Basic. Only paths to PEM files on the
+orchestrator's machine are stored, never the key itself:
+
+```yaml
+    url: "https://192.168.1.68:18800"    # tls requires https://
+    tls:
+      cert_file: "configs/certs/client.crt"  # client certificate (chain allowed)
+      key_file:  "configs/certs/client.key"  # its private key
+      ca_file:   "configs/certs/ca.crt"      # server CA; empty → system roots
+      insecure_skip_verify: false            # stand-only escape hatch
+```
+
+The files are read when the config loads and when the settings form saves, so a
+bad path is reported right there, not on the first request. The Java port reads
+only unencrypted PKCS#8 keys (`BEGIN PRIVATE KEY`); convert others with
+`openssl pkcs8 -topk8 -nocrypt -in client.key -out client.pkcs8.key`. A server
+certificate for a bare IP needs that IP in its subjectAltName.
+
 Three modes, chosen by what the user picks in the selector:
 
 | Selection | What happens |
@@ -401,7 +421,9 @@ Ouroboros в verbatim-режиме, даёт заметно разные отв�
 Пароль наружу не отдаётся никогда: список показывает лишь признак «задан», а
 пустое поле пароля при сохранении означает «не менять». Адрес и пароль,
 заданные переменными `A2A_AGENT_<ID>_URL` и `A2A_AGENT_<ID>_PASSWORD`, остаются
-последним словом — такие поля форма показывает заблокированными.
+последним словом — такие поля форма показывает заблокированными. Так же ведут
+себя пути mTLS-сертификатов (`A2A_AGENT_<ID>_TLS_CERT` / `_TLS_KEY` / `_TLS_CA`):
+форма редактирует только пути, сами файлы через браузер не ходят.
 
 > **Внимание.** Эти эндпоинты, как и `/invoke`, ничем не защищены: любой, кто
 > дотянется до порта, может подменить адрес агента и увести туда разговор.

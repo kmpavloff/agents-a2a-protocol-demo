@@ -32,8 +32,9 @@ What is ported:
   bypassing the LLM), and serves the browser frontend.
 - **multi-agent support** — the `agents:` list in `configs/orchestrator.yaml`
   (`id`/`name`/`url`/`card_path`/`skill`/`verbatim`/`timeout`/`description`
-  plus HTTP Basic), the env overrides `A2A_AGENT_<ID>_URL` and
-  `A2A_AGENT_<ID>_PASSWORD`, the agent selector in the browser
+  plus HTTP Basic and client mTLS via `tls:`), the env overrides
+  `A2A_AGENT_<ID>_URL`, `A2A_AGENT_<ID>_PASSWORD` and
+  `A2A_AGENT_<ID>_TLS_CERT`/`_TLS_KEY`/`_TLS_CA`, the agent selector in the browser
   (`GET /api/agents`), and `verbatim` mode, where the selected agent's reply
   goes straight to the browser without the local model.
 - **Settings screen** — editing the agent list right from the browser, on top
@@ -95,7 +96,10 @@ the repository root so `configs/worker.yaml`, `configs/orchestrator.yaml` and
 the first argument. All the Go env overrides work too (`LLM_BASE_URL`,
 `LLM_MODEL`, `LLM_API_KEY`, `WORKER_URL`, `WORKER_LISTEN_ADDR`,
 `WORKER_PUBLIC_URL`, `WORKER_DATA_PATH`, `ORDER_LINK_BASE`, `A2A_LOG_PATH`,
-`A2A_AGENT_<ID>_URL`, `A2A_AGENT_<ID>_PASSWORD`, `A2A_AGENTS_OVERLAY_PATH`).
+`A2A_AGENT_<ID>_URL`, `A2A_AGENT_<ID>_PASSWORD`, `A2A_AGENT_<ID>_TLS_CERT`,
+`A2A_AGENT_<ID>_TLS_KEY`, `A2A_AGENT_<ID>_TLS_CA`, `A2A_AGENTS_OVERLAY_PATH`).
+The mTLS key must be unencrypted PKCS#8 (`BEGIN PRIVATE KEY`): JDK 21 has no
+PEM parser for PKCS#1/SEC1, and the error says how to convert it.
 
 **Terminal 1 — worker (A2A server):**
 

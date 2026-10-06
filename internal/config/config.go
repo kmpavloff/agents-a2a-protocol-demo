@@ -2,6 +2,8 @@
 package config
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"os"
 	"regexp"
@@ -56,12 +58,60 @@ type AgentConfig struct {
 	// навыков, и промпт локальной модели такого не переживёт.
 	Description string     `yaml:"description"`
 	Auth        AuthConfig `yaml:"auth"`
+	// TLS — клиентский сертификат (mTLS) и доверие к серверу. Живёт отдельно
+	// от Auth: это свойство транспорта и сочетается с Basic, а не заменяет его.
+	TLS TLSConfig `yaml:"tls,omitempty"`
 }
 
 const (
 	defaultCardPath     = "/.well-known/agent-card.json"
 	defaultAgentTimeout = 120 * time.Second
 )
+
+// TLSConfig — пути к PEM-файлам на машине оркестратора. Хранятся именно пути,
+// а не содержимое: приватный ключ не должен ходить через HTTP API настроек и
+// оседать в overlay-файле.
+type TLSConfig struct {
+	CertFile string `yaml:"cert_file,omitempty"` // клиентский сертификат, цепочка допустима
+	KeyFile  string `yaml:"key_file,omitempty"`  // его приватный ключ
+	// CAFile — корни для проверки сервера; пусто → системные.
+	CAFile string `yaml:"ca_file,omitempty"`
+	// InsecureSkipVerify отключает проверку сертификата сервера целиком —
+	// только для стенда с самоподписанным сертификатом без CA под рукой.
+	InsecureSkipVerify bool `yaml:"insecure_skip_verify,omitempty"`
+}
+
+// Enabled — задано ли хоть что-то из TLS-настроек.
+func (t TLSConfig) Enabled() bool { return t != TLSConfig{} }
+
+// ClientConfig читает файлы и собирает *tls.Config. Зовётся и при валидации:
+// битый путь должен ронять загрузку конфига или сохранение формы, а не
+// всплывать на первом запросе к агенту.
+func (t TLSConfig) ClientConfig() (*tls.Config, error) {
+	if (t.CertFile == "") != (t.KeyFile == "") {
+		return nil, fmt.Errorf("tls: cert_file and key_file must be set together")
+	}
+	c := &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: t.InsecureSkipVerify} //nolint:gosec // явный выбор пользователя
+	if t.CertFile != "" {
+		pair, err := tls.LoadX509KeyPair(t.CertFile, t.KeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("tls: client certificate: %w", err)
+		}
+		c.Certificates = []tls.Certificate{pair}
+	}
+	if t.CAFile != "" {
+		pem, err := os.ReadFile(t.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("tls: ca_file: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("tls: ca_file %s: no PEM certificates found", t.CAFile)
+		}
+		c.RootCAs = pool
+	}
+	return c, nil
+}
 
 // TimeoutDuration возвращает таймаут SendMessage, подставляя значение по
 // умолчанию. Разбираемость строки уже проверена при загрузке конфига.
@@ -95,7 +145,8 @@ var agentIDRe = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 
 // AgentEnvVar возвращает имя переменной окружения для поля агента: пароль
 // незачем держать в файле, а адрес приходится подменять при запуске в
-// контейнере. field — "URL" или "PASSWORD".
+// контейнере, а с ним и пути к сертификатам. field — "URL", "PASSWORD",
+// "TLS_CERT", "TLS_KEY" или "TLS_CA".
 func AgentEnvVar(id, field string) string {
 	return "A2A_AGENT_" + strings.ToUpper(strings.ReplaceAll(id, "-", "_")) + "_" + field
 }
@@ -120,6 +171,16 @@ func ValidateAgent(a AgentConfig) error {
 	default:
 		return fmt.Errorf("agent %q: unsupported auth type %q", a.ID, a.Auth.Type)
 	}
+	if a.TLS.Enabled() {
+		// По http:// сертификат молча не участвовал бы в обмене — пусть лучше
+		// это будет видно сразу.
+		if !strings.HasPrefix(strings.ToLower(a.URL), "https://") {
+			return fmt.Errorf("agent %q: tls settings require an https:// url", a.ID)
+		}
+		if _, err := a.TLS.ClientConfig(); err != nil {
+			return fmt.Errorf("agent %q: %w", a.ID, err)
+		}
+	}
 	return nil
 }
 
@@ -135,6 +196,9 @@ func NormalizeAgents(agents []AgentConfig) error {
 		if u := os.Getenv(AgentEnvVar(a.ID, "URL")); u != "" {
 			a.URL = u
 		}
+		// Пути к сертификатам — по той же причине: в контейнере файлы
+		// монтируются в другое место.
+		ApplyTLSEnv(a.ID, &a.TLS)
 		if err := ValidateAgent(*a); err != nil {
 			return fmt.Errorf("orchestrator config: %w", err)
 		}
@@ -150,6 +214,26 @@ func NormalizeAgents(agents []AgentConfig) error {
 		}
 	}
 	return nil
+}
+
+// ApplyTLSEnv перекрывает пути к PEM-файлам переменными окружения
+// A2A_AGENT_<ID>_TLS_CERT / _TLS_KEY / _TLS_CA и возвращает, какие поля
+// перекрыты: "tlsCert", "tlsKey", "tlsCa" — те же имена видит экран настроек.
+func ApplyTLSEnv(id string, t *TLSConfig) (locked []string) {
+	for _, f := range []struct {
+		env, name string
+		dst       *string
+	}{
+		{"TLS_CERT", "tlsCert", &t.CertFile},
+		{"TLS_KEY", "tlsKey", &t.KeyFile},
+		{"TLS_CA", "tlsCa", &t.CAFile},
+	} {
+		if v := os.Getenv(AgentEnvVar(id, f.env)); v != "" {
+			*f.dst = v
+			locked = append(locked, f.name)
+		}
+	}
+	return locked
 }
 
 func env(key, cur string) string {

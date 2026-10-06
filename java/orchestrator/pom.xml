@@ -36,6 +36,18 @@
   </dependencies>
 
   <build>
+    <!-- Тестовые сертификаты mTLS живут в common и нужны обоим модулям. -->
+    <testResources>
+      <testResource>
+        <directory>src/test/resources</directory>
+      </testResource>
+      <testResource>
+        <directory>../common/src/test/resources</directory>
+        <includes>
+          <include>tls/**</include>
+        </includes>
+      </testResource>
+    </testResources>
     <plugins>
       <!-- Single runnable jar via the Boot loader (no Spring context needed for a TUI). -->
       <plugin>

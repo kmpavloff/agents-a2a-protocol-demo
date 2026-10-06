@@ -10,6 +10,7 @@ import (
 
 	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/agentstore"
 	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/config"
+	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/testcerts"
 )
 
 func newMux(t *testing.T) (*http.ServeMux, *agentstore.Store) {
@@ -195,5 +196,42 @@ func TestHiddenAgentStaysInConfigList(t *testing.T) {
 	rec := do(t, mux, http.MethodGet, "/api/agents/config", "")
 	if !strings.Contains(rec.Body.String(), `"hidden":true`) {
 		t.Errorf("скрытый агент пропал из списка: %s", rec.Body)
+	}
+}
+
+// Пути mTLS ходят через форму туда и обратно; битый путь — это 400 при
+// сохранении, а не сюрприз при первом запросе к агенту.
+func TestAgentTLSRoundTrip(t *testing.T) {
+	certs := testcerts.New(t)
+	mux, s := newMux(t)
+	tlsBody, _ := json.Marshal(map[string]any{
+		"certFile": certs.ClientCert, "keyFile": certs.ClientKey,
+		"caFile": certs.CAFile, "insecureSkipVerify": true,
+	})
+	rec := do(t, mux, http.MethodPost, "/api/agents/config",
+		`{"id":"shop","url":"https://localhost:9100","tls":`+string(tlsBody)+`}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status: %d, body: %s", rec.Code, rec.Body)
+	}
+	want := config.TLSConfig{CertFile: certs.ClientCert, KeyFile: certs.ClientKey, CAFile: certs.CAFile, InsecureSkipVerify: true}
+	if got := s.Agents()[1].TLS; got != want {
+		t.Errorf("tls в хранилище: %+v", got)
+	}
+
+	var out []struct {
+		ID  string  `json:"id"`
+		TLS tlsJSON `json:"tls"`
+	}
+	if err := json.Unmarshal(do(t, mux, http.MethodGet, "/api/agents/config", "").Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out[1].TLS.toConfig() != want {
+		t.Errorf("tls в ответе: %+v", out[1].TLS)
+	}
+
+	rec = do(t, mux, http.MethodPut, "/api/agents/config/shop",
+		`{"url":"https://localhost:9100","tls":{"certFile":"/нет/такого.crt","keyFile":"/нет/такого.key"}}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("битый путь: status %d, body: %s", rec.Code, rec.Body)
 	}
 }

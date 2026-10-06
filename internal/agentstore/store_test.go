@@ -3,9 +3,11 @@ package agentstore
 import (
 	"errors"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/config"
+	"github.com/kmpavloff/agents-a2a-protocol-demo/internal/testcerts"
 )
 
 func base() []config.AgentConfig {
@@ -358,5 +360,46 @@ func TestStoreNotifiesOnChange(t *testing.T) {
 	}
 	if len(got[0]) != 3 {
 		t.Errorf("подписчику приехал не тот список: %+v", got[0])
+	}
+}
+
+// Пути к сертификатам живут как адрес: env-значение видно в форме и помечено
+// как заблокированное, но в overlay ложится прежний путь, а не env-овый.
+func TestStoreTLSPathsFromEnvStayOffDisk(t *testing.T) {
+	fileCerts, envCerts := testcerts.New(t), testcerts.New(t)
+	t.Setenv("A2A_AGENT_OUROBOROS_TLS_CERT", envCerts.ClientCert)
+	t.Setenv("A2A_AGENT_OUROBOROS_TLS_KEY", envCerts.ClientKey)
+	fileTLS := config.TLSConfig{CertFile: fileCerts.ClientCert, KeyFile: fileCerts.ClientKey, CAFile: fileCerts.CAFile}
+	b := base()
+	b[1].URL, b[1].TLS = "https://192.168.1.68:18800", fileTLS
+	p := filepath.Join(t.TempDir(), "agents.local.yaml")
+	s, err := New(b, p)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	rec := s.Records()[1]
+	if rec.TLS.CertFile != envCerts.ClientCert || rec.TLS.CAFile != fileCerts.CAFile {
+		t.Errorf("Records должен показывать действующие пути: %+v", rec.TLS)
+	}
+	if !slices.Equal(rec.EnvLocked, []string{"tlsCert", "tlsKey"}) {
+		t.Errorf("envLocked: %v", rec.EnvLocked)
+	}
+
+	// Форма вернула показанное как есть, правка — только имени.
+	edited := rec.AgentConfig
+	edited.Name = "Новое имя"
+	if err := s.Update("ouroboros", edited); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	over, err := loadOverlay(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := over[indexOver(over, "ouroboros")].TLS; got != fileTLS {
+		t.Errorf("в overlay должны остаться прежние пути, а не env: %+v", got)
+	}
+	if got := s.Agents()[1].TLS.CertFile; got != envCerts.ClientCert {
+		t.Errorf("действующий список живёт по env: %q", got)
 	}
 }

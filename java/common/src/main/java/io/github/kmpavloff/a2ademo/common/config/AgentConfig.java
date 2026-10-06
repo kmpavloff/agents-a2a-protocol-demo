@@ -1,6 +1,8 @@
 package io.github.kmpavloff.a2ademo.common.config;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
 
@@ -8,7 +10,8 @@ import java.util.regex.Pattern;
  * Один удалённый A2A-агент, с которым умеет говорить оркестратор (порт
  * config.AgentConfig).
  *
- * <p>Запись состоит только из строк, bool и такой же записи {@link AuthConfig},
+ * <p>Запись состоит только из строк, bool и таких же записей {@link AuthConfig}
+ * и {@link TlsConfig},
  * поэтому сравнивается обычным {@code equals} — на этом держится пересборка
  * реестра при правке конфига.
  *
@@ -22,9 +25,11 @@ import java.util.regex.Pattern;
  *                 без локальной LLM — ни пересказа, ни лишней задержки
  * @param description вытесняет вывод из AgentCard: у агента может быть сотня
  *                    навыков, и промпт локальной модели такого не переживёт
+ * @param tls     клиентский сертификат (mTLS) и доверие к серверу
  */
 public record AgentConfig(String id, String name, String url, String cardPath, String skill,
-                          boolean verbatim, String timeout, String description, AuthConfig auth) {
+                          boolean verbatim, String timeout, String description, AuthConfig auth,
+                          TlsConfig tls) {
 
     public static final String DEFAULT_CARD_PATH = "/.well-known/agent-card.json";
     public static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(120);
@@ -40,6 +45,13 @@ public record AgentConfig(String id, String name, String url, String cardPath, S
         timeout = timeout == null ? "" : timeout;
         description = description == null ? "" : description;
         auth = auth == null ? AuthConfig.NONE : auth;
+        tls = tls == null ? TlsConfig.NONE : tls;
+    }
+
+    /** Агент без TLS-настроек — так его заводит большинство мест. */
+    public AgentConfig(String id, String name, String url, String cardPath, String skill,
+                       boolean verbatim, String timeout, String description, AuthConfig auth) {
+        this(id, name, url, cardPath, skill, verbatim, timeout, description, auth, TlsConfig.NONE);
     }
 
     /** Таймаут SendMessage с подстановкой умолчания. */
@@ -57,9 +69,10 @@ public record AgentConfig(String id, String name, String url, String cardPath, S
 
     /**
      * Имя переменной окружения для поля агента: пароль незачем держать в файле,
-     * а адрес приходится подменять при запуске в контейнере.
+     * а адрес приходится подменять при запуске в контейнере, а с ним и пути к
+     * сертификатам.
      *
-     * @param field "URL" или "PASSWORD"
+     * @param field "URL", "PASSWORD", "TLS_CERT", "TLS_KEY" или "TLS_CA"
      */
     public static String envVar(String id, String field) {
         // Locale.ROOT — иначе toUpperCase() зависит от локали JVM: под турецкой
@@ -96,21 +109,69 @@ public record AgentConfig(String id, String name, String url, String cardPath, S
         if (!type.isEmpty() && !type.equals("basic")) {
             throw new IllegalArgumentException("agent \"" + a.id() + "\": unsupported auth type \"" + type + "\"");
         }
+        if (a.tls().enabled()) {
+            // По http:// сертификат молча не участвовал бы в обмене — пусть
+            // лучше это будет видно сразу.
+            if (!a.url().toLowerCase(Locale.ROOT).startsWith("https://")) {
+                throw new IllegalArgumentException("agent \"" + a.id() + "\": tls settings require an https:// url");
+            }
+            try {
+                a.tls().sslContext();
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("agent \"" + a.id() + "\": " + e.getMessage(), e);
+            }
+        }
+    }
+
+    /**
+     * Перекрывает пути к PEM-файлам переменными окружения
+     * A2A_AGENT_&lt;ID&gt;_TLS_CERT / _TLS_KEY / _TLS_CA. Порт config.ApplyTLSEnv.
+     */
+    public AgentConfig withTlsEnv() {
+        return withTls(tlsEnv(id, tls).tls());
+    }
+
+    /**
+     * Итог env-перекрытия путей: новая запись TLS и какие поля перекрыты —
+     * "tlsCert", "tlsKey", "tlsCa", те же имена видит экран настроек.
+     */
+    public record TlsEnv(TlsConfig tls, List<String> locked) {
+    }
+
+    public static TlsEnv tlsEnv(String id, TlsConfig t) {
+        List<String> locked = new ArrayList<>();
+        String cert = envOr(id, "TLS_CERT", t.certFile(), "tlsCert", locked);
+        String key = envOr(id, "TLS_KEY", t.keyFile(), "tlsKey", locked);
+        String ca = envOr(id, "TLS_CA", t.caFile(), "tlsCa", locked);
+        return new TlsEnv(new TlsConfig(cert, key, ca, t.insecureSkipVerify()), List.copyOf(locked));
+    }
+
+    private static String envOr(String id, String field, String cur, String name, List<String> locked) {
+        String v = System.getenv(envVar(id, field));
+        if (v == null || v.isBlank()) {
+            return cur;
+        }
+        locked.add(name);
+        return v;
     }
 
     public AgentConfig withId(String v) {
-        return new AgentConfig(v, name, url, cardPath, skill, verbatim, timeout, description, auth);
+        return new AgentConfig(v, name, url, cardPath, skill, verbatim, timeout, description, auth, tls);
     }
 
     public AgentConfig withUrl(String v) {
-        return new AgentConfig(id, name, v, cardPath, skill, verbatim, timeout, description, auth);
+        return new AgentConfig(id, name, v, cardPath, skill, verbatim, timeout, description, auth, tls);
     }
 
     public AgentConfig withCardPath(String v) {
-        return new AgentConfig(id, name, url, v, skill, verbatim, timeout, description, auth);
+        return new AgentConfig(id, name, url, v, skill, verbatim, timeout, description, auth, tls);
     }
 
     public AgentConfig withPassword(String v) {
-        return new AgentConfig(id, name, url, cardPath, skill, verbatim, timeout, description, auth.withPassword(v));
+        return new AgentConfig(id, name, url, cardPath, skill, verbatim, timeout, description, auth.withPassword(v), tls);
+    }
+
+    public AgentConfig withTls(TlsConfig v) {
+        return new AgentConfig(id, name, url, cardPath, skill, verbatim, timeout, description, auth, v);
     }
 }

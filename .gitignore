@@ -24,3 +24,6 @@ java/**/target/
 
 # Изолированные worktree для работы над задачами.
 /.claude/worktrees/
+
+# Настоящие mTLS-сертификаты и ключи агентов (пути из tls: в конфиге).
+configs/certs/
