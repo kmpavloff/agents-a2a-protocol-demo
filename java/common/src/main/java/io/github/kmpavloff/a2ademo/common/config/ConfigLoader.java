@@ -71,7 +71,7 @@ public final class ConfigLoader {
         // Совместимость: одиночный worker_url становится единственным агентом.
         if (agents.isEmpty() && !workerUrl.isBlank()) {
             agents = List.of(new AgentConfig("orders", "Агент заказов", workerUrl,
-                    "", "", false, "", "", AuthConfig.NONE));
+                    "", List.of(), false, "", "", AuthConfig.NONE));
         }
         if (agents.isEmpty()) {
             throw new IllegalStateException(
@@ -96,7 +96,7 @@ public final class ConfigLoader {
             Map<String, Object> auth = section(a, "auth");
             out.add(new AgentConfig(
                     str(a, "id", ""), str(a, "name", ""), str(a, "url", ""),
-                    str(a, "card_path", ""), str(a, "skill", ""),
+                    str(a, "card_path", ""), AgentConfig.skillsFrom(a.get("skills"), a.get("skill")),
                     Boolean.TRUE.equals(a.get("verbatim")),
                     str(a, "timeout", ""), str(a, "description", ""),
                     new AuthConfig(str(auth, "type", ""), str(auth, "username", ""), str(auth, "password", "")),

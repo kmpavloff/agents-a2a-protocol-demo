@@ -14,6 +14,7 @@ func TestRemoteRecordsAgentCallsPerSession(t *testing.T) {
 	s := startOuroborosStub(t, true) // первый ответ WORKING → будет GetTask
 	trace := NewTracer(io.Discard, "")
 	r := NewRemote(ouroborosCfg(s.URL), trace)
+	r.SetSessionSkill("sess-1", "shop")
 
 	if _, err := r.Ask(context.Background(), "sess-1", "карта 4111 1111 1111 1111"); err != nil {
 		t.Fatalf("Ask: %v", err)

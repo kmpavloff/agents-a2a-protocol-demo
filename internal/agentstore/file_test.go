@@ -25,7 +25,7 @@ func TestSaveLoadOverlayRoundTrip(t *testing.T) {
 	want := []Override{
 		{AgentConfig: config.AgentConfig{
 			ID: "ouroboros", Name: "Ouroboros", URL: "http://192.168.1.68:18800",
-			Verbatim: true, Timeout: "240s",
+			Verbatim: true, Timeout: "240s", Skills: []string{"shop", "support"},
 			Auth: config.AuthConfig{Type: "basic", Username: "ouroboros", Password: "test"},
 		}},
 		{AgentConfig: config.AgentConfig{ID: "orders"}, Hidden: true},
@@ -40,7 +40,7 @@ func TestSaveLoadOverlayRoundTrip(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("overlay: got %d записей, want 2", len(got))
 	}
-	if got[0] != want[0] {
+	if !got[0].AgentConfig.Equal(want[0].AgentConfig) || got[0].Hidden != want[0].Hidden {
 		t.Errorf("первая запись:\n got %+v\nwant %+v", got[0], want[0])
 	}
 	if !got[1].Hidden || got[1].ID != "orders" {
@@ -92,5 +92,21 @@ func TestSaveOverlayFilePermissions(t *testing.T) {
 	}
 	if fi.Mode().Perm() != 0o600 {
 		t.Errorf("права: got %o, want 600", fi.Mode().Perm())
+	}
+}
+
+// Overlay, записанный до появления списка навыков, несёт одиночный skill: —
+// он читается как список из одного навыка.
+func TestLoadOverlayMigratesLegacySkill(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "agents.local.yaml")
+	if err := os.WriteFile(p, []byte("agents:\n  - id: o\n    url: http://x\n    skill: shop\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadOverlay(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got[0].Skills) != 1 || got[0].Skills[0] != "shop" || got[0].LegacySkill != "" {
+		t.Errorf("миграция skill: %+v", got[0].AgentConfig)
 	}
 }

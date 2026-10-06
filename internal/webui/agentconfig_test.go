@@ -235,3 +235,27 @@ func TestAgentTLSRoundTrip(t *testing.T) {
 		t.Errorf("битый путь: status %d, body: %s", rec.Code, rec.Body)
 	}
 }
+
+// Список навыков ходит через форму туда и обратно; у агента без навыков —
+// пустой массив, а не null: фронтенд итерирует его без проверок.
+func TestAgentSkillsRoundTrip(t *testing.T) {
+	mux, s := newMux(t)
+	if rec := do(t, mux, http.MethodGet, "/api/agents/config", ""); !strings.Contains(rec.Body.String(), `"skills":[]`) {
+		t.Errorf("нет пустого списка навыков: %s", rec.Body)
+	}
+	rec := do(t, mux, http.MethodPost, "/api/agents/config",
+		`{"id":"shop","url":"http://localhost:9100","skills":["shop","support"]}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status: %d, body: %s", rec.Code, rec.Body)
+	}
+	if got := s.Agents()[1].Skills; len(got) != 2 || got[1] != "support" {
+		t.Errorf("skills в хранилище: %v", got)
+	}
+	if !strings.Contains(do(t, mux, http.MethodGet, "/api/agents/config", "").Body.String(), `"skills":["shop","support"]`) {
+		t.Error("skills не вернулись в ответе")
+	}
+	rec = do(t, mux, http.MethodPut, "/api/agents/config/shop", `{"url":"http://localhost:9100","skills":["a","a"]}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("дубликат навыка: status %d", rec.Code)
+	}
+}

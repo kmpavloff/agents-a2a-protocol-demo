@@ -18,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class AgentStoreTest {
 
     private static AgentConfig agent(String id, String url) {
-        return new AgentConfig(id, "", url, "", "", false, "", "", AuthConfig.NONE);
+        return new AgentConfig(id, "", url, "", List.of(), false, "", "", AuthConfig.NONE);
     }
 
     private static List<AgentConfig> base() {
@@ -50,11 +50,11 @@ class AgentStoreTest {
     @Test
     void anEmptyPasswordMeansKeepTheCurrentOne(@TempDir Path dir) {
         AgentStore s = new AgentStore(
-                List.of(new AgentConfig("orders", "", "http://a", "", "", false, "", "",
+                List.of(new AgentConfig("orders", "", "http://a", "", List.of(), false, "", "",
                         new AuthConfig("basic", "u", "секрет"))),
                 dir.resolve("agents.local.yaml"));
 
-        s.update("orders", new AgentConfig("orders", "Новое имя", "http://a", "", "", false, "", "",
+        s.update("orders", new AgentConfig("orders", "Новое имя", "http://a", "", List.of(), false, "", "",
                 new AuthConfig("basic", "u", "")));
 
         assertEquals("секрет", s.agents().getFirst().auth().password());
@@ -96,7 +96,7 @@ class AgentStoreTest {
     @Test
     void recordsNeverCarryThePasswordButSayWhetherItIsSet(@TempDir Path dir) {
         AgentStore s = new AgentStore(
-                List.of(new AgentConfig("orders", "", "http://a", "", "", false, "", "",
+                List.of(new AgentConfig("orders", "", "http://a", "", List.of(), false, "", "",
                         new AuthConfig("basic", "u", "секрет"))),
                 dir.resolve("agents.local.yaml"));
 

@@ -85,7 +85,7 @@ class A2aClientTlsTest {
     }
 
     private void askWith(TlsConfig tls) {
-        AgentConfig cfg = new AgentConfig("tls", "", base, "", "", false, "10s", "", AuthConfig.NONE, tls);
+        AgentConfig cfg = new AgentConfig("tls", "", base, "", List.of(), false, "10s", "", AuthConfig.NONE, tls);
         A2aClient.resolve(cfg, Tracer.noop()).client()
                 .sendMessage(A2aMessage.of(A2aMessage.ROLE_USER, Part.text("привет")), List.of());
     }

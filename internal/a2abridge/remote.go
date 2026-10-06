@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -312,6 +313,7 @@ type Remote struct {
 	toolName  string             // перекрытие имени инструмента (см. Registry)
 	pending   map[string]pending // sessionID → зависшая input-required задача
 	contexts  map[string]string  // sessionID → contextId удалённого агента
+	skills    map[string]string  // sessionID → навык, выбранный в чате для этого разговора
 }
 
 // NewRemote создаёт соединение, но ещё не открывает его: карточка резолвится
@@ -323,7 +325,30 @@ func NewRemote(cfg config.AgentConfig, trace *Tracer) *Remote {
 		trace:    trace,
 		pending:  make(map[string]pending),
 		contexts: make(map[string]string),
+		skills:   make(map[string]string),
 	}
+}
+
+// Skills — навыки агента из настроек: их предлагает селектор в чате.
+func (r *Remote) Skills() []string { return slices.Clone(r.cfg.Skills) }
+
+// SetSessionSkill задаёт навык, который уйдёт в metadata.skill следующих
+// запросов этого разговора. Пустой — навык не передаётся. Навык не из списка
+// агента отвергается: браузер со старым списком не должен слать агенту то,
+// чего в настройках уже нет. Возвращает навык, который реально установлен.
+func (r *Remote) SetSessionSkill(sessionID, skill string) string {
+	if skill != "" && !r.cfg.HasSkill(skill) {
+		r.trace.Logf("⚠ unknown skill %q for agent %q — sending none", skill, r.cfg.ID)
+		skill = ""
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if skill == "" {
+		delete(r.skills, sessionID)
+	} else {
+		r.skills[sessionID] = skill
+	}
+	return skill
 }
 
 func (r *Remote) ID() string { return r.cfg.ID }
@@ -596,6 +621,7 @@ func (r *Remote) ask(ctx context.Context, sessionID string, outgoing *a2a.Part, 
 	client := r.client
 	p, hasPending := r.pending[sessionID]
 	contextID := r.contexts[sessionID]
+	skill := r.skills[sessionID]
 	r.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(ctx, r.cfg.TimeoutDuration())
@@ -627,9 +653,9 @@ func (r *Remote) ask(ctx context.Context, sessionID string, outgoing *a2a.Part, 
 	}
 	meta := map[string]any{}
 	// metadata.skill включает у внешнего агента инструменты нужного навыка;
-	// без него он отвечает только текстом.
-	if r.cfg.Skill != "" {
-		meta["skill"] = r.cfg.Skill
+	// без него он отвечает только текстом. Уходит лишь явно выбранный в чате.
+	if skill != "" {
+		meta["skill"] = skill
 	}
 	// Какие каталоги умеет наш рендерер. Штатный признак «клиент говорит на
 	// A2UI»: acceptedOutputModes спека таким признаком не считает.
@@ -651,7 +677,7 @@ func (r *Remote) ask(ctx context.Context, sessionID string, outgoing *a2a.Part, 
 	}
 	// Текст маскируется: ответом на форму возврата служит сам номер карты, и
 	// без этого он ложился бы в лог при каждом возврате.
-	r.trace.Logf("    SendMessage role=user skill=%q contextId=%s text=%q", r.cfg.Skill, sentCtx, MaskCardLike(echo))
+	r.trace.Logf("    SendMessage role=user skill=%q contextId=%s text=%q", skill, sentCtx, MaskCardLike(echo))
 
 	req := &a2a.SendMessageRequest{Message: msg}
 	if wantsA2UI {

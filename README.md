@@ -295,7 +295,7 @@ agents:
     name: "Ouroboros · магазин"
     url: "http://192.168.1.68:18800"
     card_path: "/.well-known/agent-card.json"  # only needed off the canonical path
-    skill: "shop"                          # rides in metadata.skill
+    skills: ["shop"]                       # picked in chat → metadata.skill
     verbatim: true                         # answer bypasses the local LLM
     timeout: "180s"
     description: "Заказы интернет-магазина: статус, детали, возвраты."
@@ -328,6 +328,13 @@ Three modes, chosen by what the user picks in the selector:
 | **Авто** | The orchestrator LLM gets a delegating tool per available agent and routes the request itself |
 | An agent, `verbatim: false` | The LLM runs with exactly that agent's tool — useful when the agent needs the orchestrator's HITL handling |
 | An agent, `verbatim: true` | No local LLM at all: the agent's text and A2UI go straight to the browser |
+
+**Skills.** An agent with `skills:` gets a second selector next to the agent
+one: «без навыка» plus its skills (editable on the settings screen). The chosen
+skill rides to the agent in `metadata.skill`; with «без навыка» or in **Авто**
+nothing is sent. The selection is remembered per agent in the browser, and a
+skill the agent no longer lists is dropped by the orchestrator. The legacy
+single `skill:` field still reads as a one-element list.
 
 Each agent keeps its own `contextId` per browser session, so switching back and
 forth does not break either conversation. An agent that is down does not stop

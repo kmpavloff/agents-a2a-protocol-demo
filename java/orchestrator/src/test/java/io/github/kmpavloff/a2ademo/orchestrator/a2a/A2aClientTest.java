@@ -77,7 +77,7 @@ class A2aClientTest {
 
     private A2aClient client() {
         AgentConfig cfg = new AgentConfig("ouroboros", "", base, "/.well-known/agent.json",
-                "shop", true, "30s", "Магазин.", new AuthConfig("basic", "u", "p"));
+                List.of("shop"), true, "30s", "Магазин.", new AuthConfig("basic", "u", "p"));
         return A2aClient.resolve(cfg, Tracer.noop()).client();
     }
 

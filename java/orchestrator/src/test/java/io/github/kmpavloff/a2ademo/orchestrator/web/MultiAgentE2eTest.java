@@ -27,6 +27,7 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.Map;
@@ -67,6 +68,7 @@ class MultiAgentE2eTest {
     HttpServer shopWorker;
     HttpServer ordersWorker;
     final Deque<String> shopResults = new ArrayDeque<>();
+    final List<JsonNode> shopRequests = new ArrayList<>();
     final Deque<String> ordersResults = new ArrayDeque<>();
     String ordersBase;
     StubModel model;
@@ -76,16 +78,16 @@ class MultiAgentE2eTest {
 
     @BeforeEach
     void setUp(@TempDir Path dir) throws IOException {
-        shopWorker = fakeWorker("shop-agent", "Отвечает по заказам магазина.", shopResults);
-        ordersWorker = fakeWorker("orders-agent", "Управляет заказами.", ordersResults);
+        shopWorker = fakeWorker("shop-agent", "Отвечает по заказам магазина.", shopResults, shopRequests);
+        ordersWorker = fakeWorker("orders-agent", "Управляет заказами.", ordersResults, new ArrayList<>());
         String shopBase = "http://127.0.0.1:" + shopWorker.getAddress().getPort();
         ordersBase = "http://127.0.0.1:" + ordersWorker.getAddress().getPort();
 
         // "shop" — verbatim: его ответ должен уходить в браузер без локальной
         // модели. "orders" — обычный, участвует в наборе инструментов «Авто».
         List<AgentConfig> agents = List.of(
-                new AgentConfig("shop", "", shopBase, "", "", true, "", "", AuthConfig.NONE),
-                new AgentConfig("orders", "", ordersBase, "", "", false, "", "", AuthConfig.NONE));
+                new AgentConfig("shop", "", shopBase, "", List.of("shop", "support"), true, "", "", AuthConfig.NONE),
+                new AgentConfig("orders", "", ordersBase, "", List.of(), false, "", "", AuthConfig.NONE));
         store = new AgentStore(agents, dir.resolve("agents.local.yaml"));
         registry = new Registry(store.agents(), Tracer.noop());
         // То самое, что до задачи 19 не было сделано в main(): без этой строки
@@ -109,7 +111,8 @@ class MultiAgentE2eTest {
         ordersWorker.stop(0);
     }
 
-    private static HttpServer fakeWorker(String name, String description, Deque<String> results) throws IOException {
+    private static HttpServer fakeWorker(String name, String description, Deque<String> results,
+                                         List<JsonNode> seen) throws IOException {
         HttpServer s = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         String base = "http://127.0.0.1:" + s.getAddress().getPort();
         s.createContext("/.well-known/agent-card.json", ex -> respond(ex, """
@@ -120,6 +123,7 @@ class MultiAgentE2eTest {
                 """.formatted(name, description, base)));
         s.createContext("/invoke", ex -> {
             JsonNode req = Json.MAPPER.readTree(ex.getRequestBody());
+            seen.add(req);
             respond(ex, "{\"jsonrpc\":\"2.0\",\"id\":" + req.path("id") + ",\"result\":" + results.pop() + "}");
         });
         s.start();
@@ -156,6 +160,27 @@ class MultiAgentE2eTest {
         assertEquals("Заказ 1041 доставлен", parts.getFirst().textOrEmpty());
     }
 
+    // Навык из второго селектора браузера доходит до агента в metadata.skill,
+    // а «без навыка» и чужой навык его не передают — даже если раньше в этом
+    // разговоре навык был выбран.
+    @Test
+    void theSelectedSkillReachesTheAgent() {
+        for (int i = 0; i < 3; i++) {
+            shopResults.addLast(taskWithText("ок"));
+        }
+        for (String skill : List.of("support", "", "чужой")) {
+            A2aMessage msg = A2aMessage.of(A2aMessage.ROLE_USER, Part.text("статус"));
+            msg.metadata = Map.of("agentId", "shop", "skill", skill);
+            executor.execute("c1", msg, false);
+        }
+        JsonNode first = shopRequests.get(0).path("params").path("message").path("metadata");
+        assertEquals("support", first.path("skill").asText());
+        for (int i = 1; i < 3; i++) {
+            assertTrue(shopRequests.get(i).path("params").path("message").path("metadata").path("skill").isMissingNode(),
+                    "навык не должен уходить: запрос #" + i);
+        }
+    }
+
     // Незнакомый agentId молча откатывается в «Авто»: браузер с устаревшим
     // списком не должен ломать разговор.
     @Test
@@ -170,7 +195,7 @@ class MultiAgentE2eTest {
     // Правка списка из UI применяется к живому реестру без перезапуска.
     @Test
     void anEditFromTheUiReachesTheLiveRegistry() {
-        store.create(new AgentConfig("extra", "", ordersBase, "", "", false, "", "", AuthConfig.NONE));
+        store.create(new AgentConfig("extra", "", ordersBase, "", List.of(), false, "", "", AuthConfig.NONE));
         assertTrue(registry.ids().contains("extra"));
     }
 }

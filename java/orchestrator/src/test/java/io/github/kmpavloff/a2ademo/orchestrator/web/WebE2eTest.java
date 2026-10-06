@@ -76,7 +76,7 @@ class WebE2eTest {
         worker.start();
 
         Registry reg = new Registry(
-                List.of(new AgentConfig("orders", "", base, "", "", false, "", "", AuthConfig.NONE)), Tracer.noop());
+                List.of(new AgentConfig("orders", "", base, "", List.of(), false, "", "", AuthConfig.NONE)), Tracer.noop());
         model = new StubModel();
         SessionStore sessions = new SessionStore();
         OrchestratorWebExecutor executor = new OrchestratorWebExecutor(reg,

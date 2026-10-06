@@ -55,7 +55,7 @@ class WebRoutingTest {
     @Test
     void apiAgentsIsNotSwallowedByTheSpaCatchAll(@TempDir Path tmp) throws IOException, InterruptedException {
         AgentConfig agent = new AgentConfig("orders", "Агент заказов", "http://127.0.0.1:1",
-                "", "", false, "", "", AuthConfig.NONE);
+                "", List.of(), false, "", "", AuthConfig.NONE);
         Registry registry = new Registry(List.of(agent), Tracer.noop());
         OrchestratorWebExecutor executor = new OrchestratorWebExecutor(registry,
                 (tools, summary) -> {

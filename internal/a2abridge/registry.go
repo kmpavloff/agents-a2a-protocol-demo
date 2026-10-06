@@ -22,6 +22,8 @@ type AgentInfo struct {
 	// Probed=false означает «ещё не проверяли», а не «недоступен»: клиенту
 	// нельзя показывать домысел как факт.
 	Probed bool `json:"probed"`
+	// Skills — навыки из настроек для второго селектора в чате.
+	Skills []string `json:"skills"`
 }
 
 // connectTimeout — предел на подключение прямо в ходе разговора. Щедрее, чем
@@ -245,9 +247,18 @@ func (g *Registry) List(_ context.Context) []AgentInfo {
 			Verbatim:    r.Verbatim(),
 			Available:   r.Available(),
 			Probed:      r.Probed(),
+			Skills:      nonNilSkills(r.Skills()),
 		})
 	}
 	return out
+}
+
+// nonNilSkills — браузер итерирует список без проверок на null.
+func nonNilSkills(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 // SetClientInit задаёт подготовку клиента — навешивание обработчиков виджетов,
@@ -292,7 +303,7 @@ func (g *Registry) Apply(agents []config.AgentConfig) {
 	for _, cfg := range agents {
 		order = append(order, cfg.ID)
 		cfgs[cfg.ID] = cfg
-		if old, ok := g.remotes[cfg.ID]; ok && g.cfgs[cfg.ID] == cfg {
+		if old, ok := g.remotes[cfg.ID]; ok && g.cfgs[cfg.ID].Equal(cfg) {
 			remotes[cfg.ID] = old
 			if c, ok := g.clients[cfg.ID]; ok {
 				clients[cfg.ID] = c

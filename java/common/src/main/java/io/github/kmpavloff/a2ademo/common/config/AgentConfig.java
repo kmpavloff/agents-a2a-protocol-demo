@@ -2,7 +2,9 @@ package io.github.kmpavloff.a2ademo.common.config;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.Locale;
 import java.util.regex.Pattern;
 
@@ -19,7 +21,8 @@ import java.util.regex.Pattern;
  * @param url     вытесняет адрес, объявленный в самой карточке
  * @param cardPath путь к AgentCard: не все агенты кладут её в канонический
  *                 {@value #DEFAULT_CARD_PATH}
- * @param skill   уезжает в metadata.skill каждого сообщения — так внешний агент
+ * @param skills  навыки, которые можно выбрать в чате: выбранный уезжает в
+ *                metadata.skill сообщения (без выбора не уходит ничего) — так внешний агент
  *                понимает, какой набор инструментов включать
  * @param verbatim при явном выборе этого агента в UI его ответ уходит в браузер
  *                 без локальной LLM — ни пересказа, ни лишней задержки
@@ -27,7 +30,7 @@ import java.util.regex.Pattern;
  *                    навыков, и промпт локальной модели такого не переживёт
  * @param tls     клиентский сертификат (mTLS) и доверие к серверу
  */
-public record AgentConfig(String id, String name, String url, String cardPath, String skill,
+public record AgentConfig(String id, String name, String url, String cardPath, List<String> skills,
                           boolean verbatim, String timeout, String description, AuthConfig auth,
                           TlsConfig tls) {
 
@@ -41,7 +44,7 @@ public record AgentConfig(String id, String name, String url, String cardPath, S
         name = name == null ? "" : name;
         url = url == null ? "" : url;
         cardPath = cardPath == null ? "" : cardPath;
-        skill = skill == null ? "" : skill;
+        skills = skills == null ? List.of() : List.copyOf(skills);
         timeout = timeout == null ? "" : timeout;
         description = description == null ? "" : description;
         auth = auth == null ? AuthConfig.NONE : auth;
@@ -49,9 +52,9 @@ public record AgentConfig(String id, String name, String url, String cardPath, S
     }
 
     /** Агент без TLS-настроек — так его заводит большинство мест. */
-    public AgentConfig(String id, String name, String url, String cardPath, String skill,
+    public AgentConfig(String id, String name, String url, String cardPath, List<String> skills,
                        boolean verbatim, String timeout, String description, AuthConfig auth) {
-        this(id, name, url, cardPath, skill, verbatim, timeout, description, auth, TlsConfig.NONE);
+        this(id, name, url, cardPath, skills, verbatim, timeout, description, auth, TlsConfig.NONE);
     }
 
     /** Таймаут SendMessage с подстановкой умолчания. */
@@ -105,6 +108,15 @@ public record AgentConfig(String id, String name, String url, String cardPath, S
                 throw new IllegalArgumentException("agent \"" + a.id() + "\": bad timeout \"" + a.timeout() + "\"");
             }
         }
+        Set<String> seenSkills = new HashSet<>();
+        for (String sk : a.skills()) {
+            if (sk == null || sk.isBlank()) {
+                throw new IllegalArgumentException("agent \"" + a.id() + "\": empty skill name");
+            }
+            if (!seenSkills.add(sk)) {
+                throw new IllegalArgumentException("agent \"" + a.id() + "\": duplicate skill \"" + sk + "\"");
+            }
+        }
         String type = a.auth().type();
         if (!type.isEmpty() && !type.equals("basic")) {
             throw new IllegalArgumentException("agent \"" + a.id() + "\": unsupported auth type \"" + type + "\"");
@@ -155,23 +167,46 @@ public record AgentConfig(String id, String name, String url, String cardPath, S
         return v;
     }
 
+    /** Есть ли навык в списке агента: навык из браузера принимается, только если он там заведён. */
+    public boolean hasSkill(String s) {
+        return skills.contains(s);
+    }
+
+    /**
+     * Список навыков из YAML-записи: новое поле skills: либо прежнее одиночное
+     * skill:, которое читается как список из одного навыка. Общий разбор для
+     * orchestrator.yaml и overlay.
+     */
+    public static List<String> skillsFrom(Object list, Object legacy) {
+        List<String> out = new ArrayList<>();
+        if (list instanceof List<?> l) {
+            for (Object o : l) {
+                out.add(o == null ? "" : String.valueOf(o));
+            }
+        }
+        if (out.isEmpty() && legacy != null && !String.valueOf(legacy).isEmpty()) {
+            out.add(String.valueOf(legacy));
+        }
+        return out;
+    }
+
     public AgentConfig withId(String v) {
-        return new AgentConfig(v, name, url, cardPath, skill, verbatim, timeout, description, auth, tls);
+        return new AgentConfig(v, name, url, cardPath, skills, verbatim, timeout, description, auth, tls);
     }
 
     public AgentConfig withUrl(String v) {
-        return new AgentConfig(id, name, v, cardPath, skill, verbatim, timeout, description, auth, tls);
+        return new AgentConfig(id, name, v, cardPath, skills, verbatim, timeout, description, auth, tls);
     }
 
     public AgentConfig withCardPath(String v) {
-        return new AgentConfig(id, name, url, v, skill, verbatim, timeout, description, auth, tls);
+        return new AgentConfig(id, name, url, v, skills, verbatim, timeout, description, auth, tls);
     }
 
     public AgentConfig withPassword(String v) {
-        return new AgentConfig(id, name, url, cardPath, skill, verbatim, timeout, description, auth.withPassword(v), tls);
+        return new AgentConfig(id, name, url, cardPath, skills, verbatim, timeout, description, auth.withPassword(v), tls);
     }
 
     public AgentConfig withTls(TlsConfig v) {
-        return new AgentConfig(id, name, url, cardPath, skill, verbatim, timeout, description, auth, v);
+        return new AgentConfig(id, name, url, cardPath, skills, verbatim, timeout, description, auth, v);
     }
 }

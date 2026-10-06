@@ -17,7 +17,7 @@ type agentOut struct {
 	Name        string   `json:"name"`
 	URL         string   `json:"url"`
 	CardPath    string   `json:"cardPath"`
-	Skill       string   `json:"skill"`
+	Skills      []string `json:"skills"`
 	Verbatim    bool     `json:"verbatim"`
 	Timeout     string   `json:"timeout"`
 	Description string   `json:"description"`
@@ -65,14 +65,14 @@ func tlsOut(t config.TLSConfig) tlsJSON {
 // прочитать текущий браузер не может, и форма шлёт пустое поле каждый раз,
 // когда пароль не трогали.
 type agentIn struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	URL         string `json:"url"`
-	CardPath    string `json:"cardPath"`
-	Skill       string `json:"skill"`
-	Verbatim    bool   `json:"verbatim"`
-	Timeout     string `json:"timeout"`
-	Description string `json:"description"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	URL         string   `json:"url"`
+	CardPath    string   `json:"cardPath"`
+	Skills      []string `json:"skills"`
+	Verbatim    bool     `json:"verbatim"`
+	Timeout     string   `json:"timeout"`
+	Description string   `json:"description"`
 	Auth        struct {
 		Type     string `json:"type"`
 		Username string `json:"username"`
@@ -84,13 +84,21 @@ type agentIn struct {
 func (in agentIn) toConfig() config.AgentConfig {
 	return config.AgentConfig{
 		ID: in.ID, Name: in.Name, URL: in.URL, CardPath: in.CardPath,
-		Skill: in.Skill, Verbatim: in.Verbatim, Timeout: in.Timeout,
+		Skills: in.Skills, Verbatim: in.Verbatim, Timeout: in.Timeout,
 		Description: in.Description,
 		Auth: config.AuthConfig{
 			Type: in.Auth.Type, Username: in.Auth.Username, Password: in.Auth.Password,
 		},
 		TLS: in.TLS.toConfig(),
 	}
+}
+
+// nonNil — фронтенд итерирует массивы без проверок на null.
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 func toOut(r agentstore.Record) agentOut {
@@ -100,7 +108,7 @@ func toOut(r agentstore.Record) agentOut {
 	}
 	return agentOut{
 		ID: r.ID, Name: r.Name, URL: r.URL, CardPath: r.CardPath,
-		Skill: r.Skill, Verbatim: r.Verbatim, Timeout: r.Timeout,
+		Skills: nonNil(r.Skills), Verbatim: r.Verbatim, Timeout: r.Timeout,
 		Description: r.Description,
 		Auth: authOut{
 			Type: r.Auth.Type, Username: r.Auth.Username, HasPassword: r.HasPassword,

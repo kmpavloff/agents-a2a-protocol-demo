@@ -56,7 +56,8 @@ public final class OverlayFile {
             Map<String, Object> auth = a.get("auth") instanceof Map<?, ?> m
                     ? (Map<String, Object>) m : Map.of();
             out.add(new AgentOverride(new AgentConfig(
-                    str(a, "id"), str(a, "name"), str(a, "url"), str(a, "card_path"), str(a, "skill"),
+                    str(a, "id"), str(a, "name"), str(a, "url"), str(a, "card_path"),
+                    AgentConfig.skillsFrom(a.get("skills"), a.get("skill")),
                     Boolean.TRUE.equals(a.get("verbatim")), str(a, "timeout"), str(a, "description"),
                     new AuthConfig(str(auth, "type"), str(auth, "username"), str(auth, "password")),
                     ConfigLoader.tls(a.get("tls") instanceof Map<?, ?> t ? (Map<String, Object>) t : Map.of())),
@@ -79,7 +80,10 @@ public final class OverlayFile {
             m.put("name", a.name());
             m.put("url", a.url());
             m.put("card_path", a.cardPath());
-            m.put("skill", a.skill());
+            // Как omitempty у Go: пустой список не пишется.
+            if (!a.skills().isEmpty()) {
+                m.put("skills", new ArrayList<>(a.skills()));
+            }
             m.put("verbatim", a.verbatim());
             m.put("timeout", a.timeout());
             m.put("description", a.description());

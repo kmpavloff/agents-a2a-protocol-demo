@@ -55,6 +55,27 @@ class AgentsConfigTest {
         assertEquals(Duration.ofSeconds(180), agents.get(1).timeoutDuration());
         assertTrue(agents.get(1).verbatim());
         assertEquals("ouroboros", agents.get(1).auth().username());
+        // Прежнее одиночное skill: читается как список из одного навыка.
+        assertEquals(List.of("shop"), agents.get(1).skills());
+    }
+
+    @Test
+    void readsAndValidatesTheSkillsList(@TempDir Path dir) throws IOException {
+        Path cfg = write(dir, """
+                agents:
+                  - id: ouroboros
+                    url: "http://x"
+                    skills: ["shop", "support"]
+                llm:
+                  base_url: "http://localhost:1234/v1"
+                """);
+        AgentConfig a = ConfigLoader.loadOrchestrator(cfg.toString()).agents().getFirst();
+        assertEquals(List.of("shop", "support"), a.skills());
+        assertTrue(a.hasSkill("support"));
+        assertThrows(IllegalArgumentException.class, () -> AgentConfig.validate(
+                new AgentConfig("o", "", "http://x", "", List.of("shop", " "), false, "", "", AuthConfig.NONE)));
+        assertThrows(IllegalArgumentException.class, () -> AgentConfig.validate(
+                new AgentConfig("o", "", "http://x", "", List.of("shop", "shop"), false, "", "", AuthConfig.NONE)));
     }
 
     // Исторический одиночный агент: из worker_url синтезируется запись orders,
@@ -97,13 +118,13 @@ class AgentsConfigTest {
     @Test
     void rejectsABadId() {
         assertThrows(IllegalArgumentException.class, () -> AgentConfig.validate(
-                new AgentConfig("Orders", "", "http://x", "", "", false, "", "", AuthConfig.NONE)));
+                new AgentConfig("Orders", "", "http://x", "", List.of(), false, "", "", AuthConfig.NONE)));
         assertThrows(IllegalArgumentException.class, () -> AgentConfig.validate(
-                new AgentConfig("orders", "", "", "", "", false, "", "", AuthConfig.NONE)));
+                new AgentConfig("orders", "", "", "", List.of(), false, "", "", AuthConfig.NONE)));
         assertThrows(IllegalArgumentException.class, () -> AgentConfig.validate(
-                new AgentConfig("orders", "", "http://x", "", "", false, "нет", "", AuthConfig.NONE)));
+                new AgentConfig("orders", "", "http://x", "", List.of(), false, "нет", "", AuthConfig.NONE)));
         assertThrows(IllegalArgumentException.class, () -> AgentConfig.validate(
-                new AgentConfig("orders", "", "http://x", "", "", false, "", "", new AuthConfig("bearer", "u", "p"))));
+                new AgentConfig("orders", "", "http://x", "", List.of(), false, "", "", new AuthConfig("bearer", "u", "p"))));
     }
 
     // Go — switch по a.Auth.Type с точным совпадением "" или "basic" — регистр
@@ -111,14 +132,14 @@ class AgentsConfigTest {
     @Test
     void rejectsANonLowercaseAuthType() {
         assertThrows(IllegalArgumentException.class, () -> AgentConfig.validate(
-                new AgentConfig("orders", "", "http://x", "", "", false, "", "", new AuthConfig("Basic", "u", "p"))));
+                new AgentConfig("orders", "", "http://x", "", List.of(), false, "", "", new AuthConfig("Basic", "u", "p"))));
     }
 
     @Test
     void rejectsADuplicateAgentId() {
         List<AgentConfig> agents = List.of(
-                new AgentConfig("orders", "", "http://a", "", "", false, "", "", AuthConfig.NONE),
-                new AgentConfig("orders", "", "http://b", "", "", false, "", "", AuthConfig.NONE));
+                new AgentConfig("orders", "", "http://a", "", List.of(), false, "", "", AuthConfig.NONE),
+                new AgentConfig("orders", "", "http://b", "", List.of(), false, "", "", AuthConfig.NONE));
         IllegalStateException e = assertThrows(IllegalStateException.class,
                 () -> ConfigLoader.normalizeAgents(agents));
         assertTrue(e.getMessage().contains("duplicate agent id"), e.getMessage());

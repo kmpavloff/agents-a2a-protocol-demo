@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -108,7 +109,8 @@ llm:
 		t.Errorf("default timeout: got %v", cfg.Agents[0].TimeoutDuration())
 	}
 	o := cfg.Agents[1]
-	if o.Skill != "shop" || !o.Verbatim || o.TimeoutDuration() != 180*time.Second {
+	// Прежнее одиночное skill: читается как список из одного навыка.
+	if !slices.Equal(o.Skills, []string{"shop"}) || o.LegacySkill != "" || !o.Verbatim || o.TimeoutDuration() != 180*time.Second {
 		t.Errorf("ouroboros fields: %+v", o)
 	}
 	if o.CardPath != "/.well-known/agent.json" {
@@ -309,5 +311,39 @@ llm:
 	want := TLSConfig{CertFile: certs.ClientCert, KeyFile: certs.ClientKey, CAFile: certs.CAFile, InsecureSkipVerify: true}
 	if cfg.Agents[0].TLS != want {
 		t.Errorf("tls: got %+v", cfg.Agents[0].TLS)
+	}
+}
+
+func TestAgentSkillsList(t *testing.T) {
+	p := writeTemp(t, `
+agents:
+  - id: ouroboros
+    url: "http://x"
+    skills: ["shop", "support"]
+llm:
+  base_url: "http://localhost:1234/v1"
+`)
+	cfg, err := LoadOrchestrator(p)
+	if err != nil {
+		t.Fatalf("LoadOrchestrator: %v", err)
+	}
+	a := cfg.Agents[0]
+	if !slices.Equal(a.Skills, []string{"shop", "support"}) || !a.HasSkill("support") || a.HasSkill("ouroboros") {
+		t.Errorf("skills: %+v", a.Skills)
+	}
+	for name, skills := range map[string][]string{
+		"пустой навык": {"shop", " "},
+		"дубликат":     {"shop", "shop"},
+	} {
+		if err := ValidateAgent(AgentConfig{ID: "o", URL: "http://x", Skills: skills}); err == nil {
+			t.Errorf("%s: ожидалась ошибка", name)
+		}
+	}
+	// nil и пустой список — одно и то же для пересборки реестра.
+	if !(AgentConfig{ID: "o"}).Equal(AgentConfig{ID: "o", Skills: []string{}}) {
+		t.Error("nil и [] должны считаться равными")
+	}
+	if (AgentConfig{ID: "o", Skills: []string{"a"}}).Equal(AgentConfig{ID: "o", Skills: []string{"b"}}) {
+		t.Error("разные навыки должны различаться")
 	}
 }

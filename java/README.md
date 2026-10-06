@@ -31,7 +31,7 @@ What is ported:
   (`approve_refund`/`decline_refund` resume the pending worker task directly,
   bypassing the LLM), and serves the browser frontend.
 - **multi-agent support** — the `agents:` list in `configs/orchestrator.yaml`
-  (`id`/`name`/`url`/`card_path`/`skill`/`verbatim`/`timeout`/`description`
+  (`id`/`name`/`url`/`card_path`/`skills`/`verbatim`/`timeout`/`description`
   plus HTTP Basic and client mTLS via `tls:`), the env overrides
   `A2A_AGENT_<ID>_URL`, `A2A_AGENT_<ID>_PASSWORD` and
   `A2A_AGENT_<ID>_TLS_CERT`/`_TLS_KEY`/`_TLS_CA`, the agent selector in the browser

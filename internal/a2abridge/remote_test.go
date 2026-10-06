@@ -152,7 +152,7 @@ func (s *ouroborosStub) message(t *testing.T, i int) map[string]any {
 func ouroborosCfg(url string) config.AgentConfig {
 	return config.AgentConfig{
 		ID: "ouroboros", Name: "Ouroboros", URL: url,
-		CardPath: "/.well-known/agent.json", Skill: "shop", Verbatim: true,
+		CardPath: "/.well-known/agent.json", Skills: []string{"shop", "support"}, Verbatim: true,
 		Description: "Заказы магазина.", Timeout: "10s",
 		Auth: config.AuthConfig{Type: "basic", Username: "ouroboros", Password: "testpass"},
 	}
@@ -161,6 +161,7 @@ func ouroborosCfg(url string) config.AgentConfig {
 func TestRemoteAskSendsSkillAndParsesA2UI(t *testing.T) {
 	s := startOuroborosStub(t, false)
 	r := NewRemote(ouroborosCfg(s.URL), nil)
+	r.SetSessionSkill("sess-1", "shop")
 
 	reply, err := r.Ask(context.Background(), "sess-1", "статус заказа ORD-001")
 	if err != nil {
@@ -412,6 +413,7 @@ func TestRemoteRequestsA2UIWhenCardAdvertisesIt(t *testing.T) {
 func TestRemoteAnnouncesA2UICapabilities(t *testing.T) {
 	s := startOuroborosStub(t, false)
 	r := NewRemote(ouroborosCfg(s.URL), nil)
+	r.SetSessionSkill("sess-1", "shop")
 	if _, err := r.Ask(context.Background(), "sess-1", "статус заказа"); err != nil {
 		t.Fatalf("Ask: %v", err)
 	}
@@ -524,5 +526,41 @@ func TestFirstProseTextSkipsA2UI(t *testing.T) {
 	}
 	if got := firstProseText([]*a2a.Part{a2uiPart}); got != "" {
 		t.Errorf("без человекочитаемой части текста быть не должно: %q", got)
+	}
+}
+
+// Навык уходит только явно выбранный и только из списка агента: без выбора
+// metadata.skill нет вовсе, чужой навык отвергается, выбор живёт по разговору.
+func TestRemoteSkillIsPerSessionAndValidated(t *testing.T) {
+	s := startOuroborosStub(t, false)
+	r := NewRemote(ouroborosCfg(s.URL), nil)
+	skillOf := func(i int) any {
+		meta, _ := s.message(t, i)["metadata"].(map[string]any)
+		return meta["skill"]
+	}
+
+	if got := r.SetSessionSkill("a", "support"); got != "support" {
+		t.Fatalf("SetSessionSkill: %q", got)
+	}
+	if got := r.SetSessionSkill("b", "чужой"); got != "" {
+		t.Errorf("навык не из списка должен отвергаться, got %q", got)
+	}
+	for _, sess := range []string{"a", "b", "c"} {
+		if _, err := r.Ask(context.Background(), sess, "привет"); err != nil {
+			t.Fatalf("Ask %s: %v", sess, err)
+		}
+	}
+	if skillOf(0) != "support" {
+		t.Errorf("сессия a: %v", skillOf(0))
+	}
+	if skillOf(1) != nil || skillOf(2) != nil {
+		t.Errorf("без выбора навык уходить не должен: b=%v c=%v", skillOf(1), skillOf(2))
+	}
+	r.SetSessionSkill("a", "")
+	if _, err := r.Ask(context.Background(), "a", "ещё"); err != nil {
+		t.Fatal(err)
+	}
+	if skillOf(3) != nil {
+		t.Errorf("сброшенный навык всё ещё уходит: %v", skillOf(3))
 	}
 }

@@ -25,7 +25,7 @@ class OrdersClientTest {
         private final Reply reply;
 
         StubRemote(Reply reply) {
-            super(new AgentConfig("stub", "", "http://127.0.0.1:1", "", "", false, "", "", AuthConfig.NONE),
+            super(new AgentConfig("stub", "", "http://127.0.0.1:1", "", List.of(), false, "", "", AuthConfig.NONE),
                     Tracer.noop());
             this.reply = reply;
         }

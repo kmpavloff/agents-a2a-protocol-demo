@@ -91,9 +91,22 @@ interface AgentInfo {
   // probed=false — «ещё не проверяли». Пометка о недоступности до первой
   // проверки была бы домыслом: агент отвечает не мгновенно.
   probed: boolean;
+  // Навыки из настроек агента — варианты второго селектора.
+  skills: string[];
 }
 
 const AGENT_STORAGE_KEY = 'a2a.agentId';
+// Навык помнится отдельно для каждого агента: у разных агентов разные списки.
+const SKILL_STORAGE_PREFIX = 'a2a.skill.';
+const NO_SKILL = '';
+
+function storedSkill(agentId: string): string {
+  try {
+    return localStorage.getItem(SKILL_STORAGE_PREFIX + agentId) ?? NO_SKILL;
+  } catch {
+    return NO_SKILL;
+  }
+}
 const AUTO_AGENT = 'auto';
 
 @customElement('orders-app')
@@ -178,6 +191,7 @@ export class OrdersApp extends LitElement {
   @state() private _agentsError = '';
   @state() private _agentId =
     localStorage.getItem(AGENT_STORAGE_KEY) ?? AUTO_AGENT;
+  @state() private _skill = storedSkill(this._agentId);
   // Секунды текущего хода. Удалённый агент отвечает десятки секунд, поэтому
   // ожидание должно быть видимым, а не просто крутящимся кружком.
   @state() private _elapsed = 0;
@@ -192,6 +206,7 @@ export class OrdersApp extends LitElement {
       this._traffic = [...this._traffic, e];
     });
     this.#client.setAgent(this._agentId);
+    this.#client.setSkill(this._skill);
     void this.#loadAgents();
     // Доступность агентов меняется на ходу (перезапуск, кратковременный 503),
     // а список грузится один раз — поэтому обновляем его периодически, иначе
@@ -232,6 +247,12 @@ export class OrdersApp extends LitElement {
       if (this._agentId !== AUTO_AGENT && !agents.some((a) => a.id === this._agentId)) {
         this.#selectAgent(AUTO_AGENT);
       }
+      // Так же и навык, убранный из настроек агента: селектор не должен
+      // показывать то, чего оркестратор уже не примет.
+      const cur = this._agents.find((a) => a.id === this._agentId);
+      if (this._skill !== NO_SKILL && !cur?.skills?.includes(this._skill)) {
+        this.#selectSkill(NO_SKILL);
+      }
     } catch (err) {
       console.error('agent list failed:', err);
       // Список сохраняем: сорвавшийся опрос не повод терять рабочий селектор.
@@ -260,6 +281,21 @@ export class OrdersApp extends LitElement {
     this._agentId = id;
     localStorage.setItem(AGENT_STORAGE_KEY, id);
     this.#client.setAgent(id);
+    // У каждого агента свой запомненный навык.
+    this._skill = id === AUTO_AGENT ? NO_SKILL : storedSkill(id);
+    this.#client.setSkill(this._skill);
+  }
+
+  #selectSkill(skill: string) {
+    this._skill = skill;
+    if (this._agentId !== AUTO_AGENT) {
+      try {
+        localStorage.setItem(SKILL_STORAGE_PREFIX + this._agentId, skill);
+      } catch {
+        /* без хранилища навык просто не запомнится */
+      }
+    }
+    this.#client.setSkill(skill);
   }
 
   // Whose answer we are waiting for. At tens of seconds per remote turn it
@@ -687,6 +723,21 @@ export class OrdersApp extends LitElement {
                 </option>`,
               )}
             </select>
+            ${selected?.skills?.length
+              ? html`<label for="skill">Навык:</label>
+                  <select
+                    id="skill"
+                    @change=${(e: Event) =>
+                      this.#selectSkill((e.target as HTMLSelectElement).value)}
+                  >
+                    <option value=${NO_SKILL} ?selected=${this._skill === NO_SKILL}>
+                      без навыка
+                    </option>
+                    ${selected.skills.map(
+                      (s) => html`<option value=${s} ?selected=${s === this._skill}>${s}</option>`,
+                    )}
+                  </select>`
+              : nothing}
             <label for="mode">Режим:</label>
             <select
               id="mode"

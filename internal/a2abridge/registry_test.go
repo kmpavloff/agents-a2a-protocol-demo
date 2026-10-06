@@ -70,6 +70,9 @@ func TestRegistryListMarksUnavailable(t *testing.T) {
 	if !infos[0].Verbatim {
 		t.Error("verbatim flag lost")
 	}
+	if len(infos[0].Skills) != 2 || infos[0].Skills[0] != "shop" {
+		t.Errorf("навыки для селектора в чате: %v", infos[0].Skills)
+	}
 	// Недоступный агент не должен попадать в набор инструментов «Авто».
 	if tools := g.Tools(context.Background()); len(tools) != 0 {
 		t.Errorf("unavailable agent must not contribute a tool, got %d", len(tools))

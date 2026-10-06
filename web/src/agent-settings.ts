@@ -7,7 +7,7 @@ interface AgentConfig {
   name: string;
   url: string;
   cardPath: string;
-  skill: string;
+  skills: string[];
   verbatim: boolean;
   timeout: string;
   description: string;
@@ -43,7 +43,7 @@ interface Draft extends AgentConfig {
 }
 
 const EMPTY: Draft = {
-  id: '', name: '', url: '', cardPath: '', skill: '', verbatim: false,
+  id: '', name: '', url: '', cardPath: '', skills: [], verbatim: false,
   timeout: '', description: '',
   auth: {type: '', username: '', hasPassword: false},
   tls: {certFile: '', keyFile: '', caFile: '', insecureSkipVerify: false},
@@ -87,12 +87,12 @@ export class AgentSettings extends LitElement {
   }
 
   #edit(a: AgentConfig) {
-    this._draft = {...a, auth: {...a.auth}, tls: {...a.tls}, password: '', isNew: false};
+    this._draft = {...a, auth: {...a.auth}, tls: {...a.tls}, skills: [...a.skills], password: '', isNew: false};
     this._error = '';
   }
 
   #add() {
-    this._draft = {...EMPTY, auth: {...EMPTY.auth}, tls: {...EMPTY.tls}};
+    this._draft = {...EMPTY, auth: {...EMPTY.auth}, tls: {...EMPTY.tls}, skills: []};
     this._error = '';
   }
 
@@ -133,7 +133,9 @@ export class AgentSettings extends LitElement {
     const d = this._draft;
     if (!d) return;
     const body = {
-      id: d.id, name: d.name, url: d.url, cardPath: d.cardPath, skill: d.skill,
+      id: d.id, name: d.name, url: d.url, cardPath: d.cardPath,
+      // Пустые строки — недописанные поля формы, их не сохраняем.
+      skills: d.skills.map((s) => s.trim()).filter((s) => s !== ''),
       verbatim: d.verbatim, timeout: d.timeout, description: d.description,
       auth: {type: d.auth.type, username: d.auth.username, password: d.password},
       tls: d.tls,
@@ -265,6 +267,18 @@ export class AgentSettings extends LitElement {
       background: #f0f1f3;
       color: #8b949e;
     }
+    .skill-row {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 6px;
+    }
+    .skill-row input {
+      flex: 1;
+    }
+    button.ghost.small {
+      padding: 4px 10px;
+      font-size: 13px;
+    }
     h4 {
       margin: 18px 0 2px;
       font-size: 14px;
@@ -346,6 +360,31 @@ export class AgentSettings extends LitElement {
   }
 
   /**
+   * Навыки агента — варианты второго селектора в чате. Выбранный уходит
+   * агенту в metadata.skill; без выбора не уходит ничего.
+   */
+  #renderSkills(d: Draft) {
+    const set = (i: number, v: string) =>
+      this.#patch({skills: d.skills.map((s, j) => (j === i ? v : s))});
+    return html`
+      <label>Навыки (metadata.skill)</label>
+      ${d.skills.map(
+        (sk, i) => html`<div class="skill-row">
+          <input type="text" class="f-skill" .value=${sk} placeholder="например, shop"
+            @input=${(e: Event) => set(i, (e.target as HTMLInputElement).value)} />
+          <button type="button" class="ghost small" title="Убрать навык"
+            @click=${() => this.#patch({skills: d.skills.filter((_, j) => j !== i)})}>✕</button>
+        </div>`,
+      )}
+      <button type="button" class="ghost small add-skill"
+        @click=${() => this.#patch({skills: [...d.skills, '']})}>+ Добавить навык</button>
+      <div class="hint">
+        Навык выбирается в чате вторым селектором, рядом с агентом. В режиме
+        «Авто» и при «без навыка» агенту не передаётся ничего.
+      </div>`;
+  }
+
+  /**
    * Клиентский сертификат. Отдельно от «Аутентификации»: mTLS — свойство
    * транспорта и сочетается с Basic, а не заменяет его.
    */
@@ -420,10 +459,7 @@ export class AgentSettings extends LitElement {
         placeholder="/.well-known/agent-card.json"
         @input=${(e: Event) => this.#patch({cardPath: (e.target as HTMLInputElement).value})} />
 
-      <label for="f-skill">Навык (metadata.skill)</label>
-      <input id="f-skill" type="text" .value=${d.skill}
-        placeholder="пусто — не отправлять"
-        @input=${(e: Event) => this.#patch({skill: (e.target as HTMLInputElement).value})} />
+      ${this.#renderSkills(d)}
 
       <label for="f-timeout">Таймаут хода</label>
       <input id="f-timeout" type="text" .value=${d.timeout} placeholder="120s"

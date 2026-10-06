@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class OverlaysTest {
 
     private static AgentConfig agent(String id, String url) {
-        return new AgentConfig(id, "", url, "", "", false, "", "", AuthConfig.NONE);
+        return new AgentConfig(id, "", url, "", List.of(), false, "", "", AuthConfig.NONE);
     }
 
     private static List<AgentConfig> base() {

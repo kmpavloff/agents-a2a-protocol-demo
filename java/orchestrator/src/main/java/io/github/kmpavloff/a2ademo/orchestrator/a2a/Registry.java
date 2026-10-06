@@ -26,7 +26,7 @@ public class Registry {
 
     /** То, что оркестратор рассказывает браузеру про доступных агентов. */
     public record AgentInfo(String id, String name, String description,
-                            boolean verbatim, boolean available, boolean probed) {}
+                            boolean verbatim, boolean available, boolean probed, List<String> skills) {}
 
     private final Tracer trace;
     private final Object lock = new Object();
@@ -211,7 +211,7 @@ public class Registry {
                 continue;
             }
             probeAsync(r);
-            out.add(new AgentInfo(r.id(), r.name(), r.description(), r.verbatim(), r.available(), r.probed()));
+            out.add(new AgentInfo(r.id(), r.name(), r.description(), r.verbatim(), r.available(), r.probed(), r.skills()));
         }
         return out;
     }

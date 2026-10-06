@@ -17,8 +17,8 @@ class AgentsControllerTest {
     @Test
     void listsEveryAgentInConfigOrder() {
         Registry reg = new Registry(List.of(
-                new AgentConfig("orders", "Агент заказов", "http://a", "", "", false, "", "", AuthConfig.NONE),
-                new AgentConfig("shop", "Магазин", "http://b", "", "", true, "", "Заказы магазина.", AuthConfig.NONE)),
+                new AgentConfig("orders", "Агент заказов", "http://a", "", List.of(), false, "", "", AuthConfig.NONE),
+                new AgentConfig("shop", "Магазин", "http://b", "", List.of(), true, "", "Заказы магазина.", AuthConfig.NONE)),
                 Tracer.noop());
 
         List<Registry.AgentInfo> out = new AgentsController(reg).agents();

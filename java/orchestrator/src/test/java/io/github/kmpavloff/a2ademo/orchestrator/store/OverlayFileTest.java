@@ -30,9 +30,9 @@ class OverlayFileTest {
         Path p = dir.resolve("nested/agents.local.yaml");
         List<AgentOverride> over = List.of(
                 new AgentOverride(new AgentConfig("orders", "Мой воркер", "http://127.0.0.1:9000",
-                        "/.well-known/agent.json", "shop", true, "180s", "Заказы.",
+                        "/.well-known/agent.json", List.of("shop"), true, "180s", "Заказы.",
                         new AuthConfig("basic", "u", "секрет")), false),
-                new AgentOverride(new AgentConfig("ouroboros", "", "", "", "", false, "", "", AuthConfig.NONE), true));
+                new AgentOverride(new AgentConfig("ouroboros", "", "", "", List.of(), false, "", "", AuthConfig.NONE), true));
 
         OverlayFile.save(p, over);
 
@@ -51,9 +51,9 @@ class OverlayFileTest {
     void roundTripsTlsPaths(@TempDir Path dir) throws IOException {
         Path p = dir.resolve("agents.local.yaml");
         List<AgentOverride> over = List.of(
-                new AgentOverride(new AgentConfig("o", "", "https://x", "", "", false, "", "", AuthConfig.NONE,
+                new AgentOverride(new AgentConfig("o", "", "https://x", "", List.of(), false, "", "", AuthConfig.NONE,
                         new TlsConfig("/c.crt", "/c.key", "", true)), false),
-                new AgentOverride(new AgentConfig("p", "", "http://y", "", "", false, "", "", AuthConfig.NONE), false));
+                new AgentOverride(new AgentConfig("p", "", "http://y", "", List.of(), false, "", "", AuthConfig.NONE), false));
 
         OverlayFile.save(p, over);
 
@@ -64,11 +64,27 @@ class OverlayFileTest {
         assertEquals(over, OverlayFile.load(p));
     }
 
+    // Overlay, записанный до появления списка навыков, несёт одиночный skill:
+    // — он читается как список из одного навыка; пишется уже skills:.
+    @Test
+    void migratesTheLegacySkillAndWritesTheList(@TempDir Path dir) throws IOException {
+        Path p = dir.resolve("agents.local.yaml");
+        Files.writeString(p, "agents:\n  - id: o\n    url: http://x\n    skill: shop\n");
+        AgentOverride o = OverlayFile.load(p).getFirst();
+        assertEquals(List.of("shop"), o.agent().skills());
+
+        OverlayFile.save(p, List.of(new AgentOverride(new AgentConfig("o", "", "http://x", "",
+                List.of("shop", "support"), false, "", "", AuthConfig.NONE), false)));
+        String yaml = Files.readString(p);
+        assertTrue(yaml.contains("skills:") && !yaml.contains("skill:"), yaml);
+        assertEquals(List.of("shop", "support"), OverlayFile.load(p).getFirst().agent().skills());
+    }
+
     @Test
     void overwritesTheWholeFile(@TempDir Path dir) {
         Path p = dir.resolve("agents.local.yaml");
         OverlayFile.save(p, List.of(new AgentOverride(
-                new AgentConfig("a", "", "http://a", "", "", false, "", "", AuthConfig.NONE), false)));
+                new AgentConfig("a", "", "http://a", "", List.of(), false, "", "", AuthConfig.NONE), false)));
         OverlayFile.save(p, List.of());
         assertEquals(List.of(), OverlayFile.load(p));
     }

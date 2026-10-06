@@ -21,7 +21,7 @@ class AgentConfigControllerTest {
 
     private static AgentConfigController controller(Path dir) {
         return new AgentConfigController(new AgentStore(
-                List.of(new AgentConfig("orders", "Агент заказов", "http://a", "", "", false, "", "",
+                List.of(new AgentConfig("orders", "Агент заказов", "http://a", "", List.of(), false, "", "",
                         new AuthConfig("basic", "u", "секрет"))),
                 dir.resolve("agents.local.yaml")));
     }

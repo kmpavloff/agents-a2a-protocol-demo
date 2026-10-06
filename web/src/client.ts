@@ -167,6 +167,8 @@ export class A2UIClient {
   // Which agent the user picked in the selector. 'auto' lets the orchestrator's
   // LLM route the request itself, so it is never sent over the wire.
   #agentId = 'auto';
+  // Навык из второго селектора; пусто — «без навыка», ничего не шлём.
+  #skill = '';
   // Режим разговора: false — «только текст», расширение не объявляем вовсе.
   #a2ui = true;
   // Поставщик модели данных поверхностей — см. setDataModelProvider.
@@ -179,6 +181,11 @@ export class A2UIClient {
 
   setAgent(id: string) {
     this.#agentId = id || 'auto';
+  }
+
+  /** Навык выбранного агента: уйдёт ему в metadata.skill. Пусто — без навыка. */
+  setSkill(skill: string) {
+    this.#skill = skill;
   }
 
   /**
@@ -231,6 +238,8 @@ export class A2UIClient {
         // The chosen agent rides in the message metadata — the same mechanism
         // A2A agents use for extension-specific hints.
         ...(this.#agentId !== 'auto' ? {agentId: this.#agentId} : {}),
+        // Навык имеет смысл только вместе с явно выбранным агентом.
+        ...(this.#agentId !== 'auto' && this.#skill ? {skill: this.#skill} : {}),
         // Всё, что относится к A2UI, объявляется только в режиме виджетов.
         // Каталоги рендерера вместе с заголовком расширения — штатный признак
         // «клиент говорит на A2UI»; acceptedOutputModes спека таким признаком

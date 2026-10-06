@@ -6,7 +6,9 @@ import (
 	"crypto/x509"
 	"fmt"
 	"os"
+	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -47,9 +49,13 @@ type AgentConfig struct {
 	// CardPath — путь к AgentCard: не все агенты кладут её в канонический
 	// /.well-known/agent-card.json.
 	CardPath string `yaml:"card_path"`
-	// Skill уезжает в metadata.skill каждого сообщения — так внешний агент
-	// понимает, какой набор инструментов включать.
-	Skill string `yaml:"skill"`
+	// Skills — навыки, которые можно выбрать в чате: выбранный уезжает в
+	// metadata.skill сообщения, и по нему внешний агент понимает, какой набор
+	// инструментов включать. Без явного выбора навык не передаётся вовсе.
+	Skills []string `yaml:"skills,omitempty"`
+	// LegacySkill — прежнее одиночное поле skill:. Только читается: при
+	// нормализации становится единственным элементом Skills.
+	LegacySkill string `yaml:"skill,omitempty"`
 	// Verbatim: при явном выборе этого агента в UI его ответ уходит в браузер
 	// без локальной LLM — ни пересказа, ни лишней латентности.
 	Verbatim bool   `yaml:"verbatim"`
@@ -166,6 +172,16 @@ func ValidateAgent(a AgentConfig) error {
 			return fmt.Errorf("agent %q: bad timeout %q", a.ID, a.Timeout)
 		}
 	}
+	seenSkill := make(map[string]bool, len(a.Skills))
+	for _, sk := range a.Skills {
+		if strings.TrimSpace(sk) == "" {
+			return fmt.Errorf("agent %q: empty skill name", a.ID)
+		}
+		if seenSkill[sk] {
+			return fmt.Errorf("agent %q: duplicate skill %q", a.ID, sk)
+		}
+		seenSkill[sk] = true
+	}
 	switch a.Auth.Type {
 	case "", "basic":
 	default:
@@ -184,6 +200,32 @@ func ValidateAgent(a AgentConfig) error {
 	return nil
 }
 
+// MigrateLegacy переносит прежнее одиночное skill: в список Skills. Зовётся
+// везде, где запись читается из файла: и для конфига, и для overlay.
+func (a *AgentConfig) MigrateLegacy() {
+	if a.LegacySkill != "" && len(a.Skills) == 0 {
+		a.Skills = []string{a.LegacySkill}
+	}
+	a.LegacySkill = ""
+}
+
+// HasSkill отвечает, есть ли навык в списке агента: навык из браузера
+// принимается, только если он там заведён.
+func (a AgentConfig) HasSkill(s string) bool {
+	return slices.Contains(a.Skills, s)
+}
+
+// Equal сравнивает записи целиком. Отдельно от ==, потому что Skills —
+// слайс; по этому сравнению реестр решает, пересоздавать ли соединение.
+func (a AgentConfig) Equal(b AgentConfig) bool {
+	if !slices.Equal(a.Skills, b.Skills) {
+		return false
+	}
+	// nil и пустой список — одно и то же: оба значат «навыков нет».
+	a.Skills, b.Skills = nil, nil
+	return reflect.DeepEqual(a, b)
+}
+
 // NormalizeAgents подставляет умолчания и env-перекрытия, затем валидирует
 // список. Применяется и к списку из YAML, и к слитому с overlay — поэтому
 // env остаётся последним словом в обоих случаях.
@@ -191,6 +233,7 @@ func NormalizeAgents(agents []AgentConfig) error {
 	seen := make(map[string]bool, len(agents))
 	for i := range agents {
 		a := &agents[i]
+		a.MigrateLegacy()
 		// Адрес перекрывается окружением: в контейнере агент живёт по другому
 		// имени, чем на машине разработчика, а конфиг один и тот же.
 		if u := os.Getenv(AgentEnvVar(a.ID, "URL")); u != "" {

@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -26,7 +27,7 @@ class TlsConfigTest {
     }
 
     private static AgentConfig agent(String url, TlsConfig tls) {
-        return new AgentConfig("o", "", url, "", "", false, "", "", AuthConfig.NONE, tls);
+        return new AgentConfig("o", "", url, "", List.of(), false, "", "", AuthConfig.NONE, tls);
     }
 
     private static final TlsConfig FULL =

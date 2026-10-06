@@ -110,6 +110,7 @@ public class OrchestratorWebExecutor {
         }
 
         String agentId = selectAgent(message);
+        applySkill(sessionId, agentId, message);
         long turn = surfaceSeq.incrementAndGet();
         trace.logf("  agent selection: %s | ход #%d", agentId, turn);
 
@@ -226,6 +227,35 @@ public class OrchestratorWebExecutor {
             return AUTO_AGENT_ID;
         }
         return id;
+    }
+
+    /**
+     * Выставляет навык этого хода: выбранному в чате агенту — навык из
+     * metadata.skill сообщения браузера, всем остальным — никакого. Навык живёт
+     * в Remote по разговору, поэтому доходит до агента одинаково и в
+     * verbatim-ходе, и через вызов инструмента моделью. В «Авто» навык не
+     * передаётся никому: выбрать его можно только вместе с агентом.
+     */
+    private void applySkill(String sessionId, String agentId, A2aMessage msg) {
+        String skill = "";
+        if (!agentId.equals(AUTO_AGENT_ID) && msg != null && msg.metadata != null
+                && msg.metadata.get("skill") instanceof String s) {
+            skill = s;
+        }
+        for (String id : reg.ids()) {
+            Remote r = reg.get(id).orElse(null);
+            if (r == null) {
+                continue;
+            }
+            if (id.equals(agentId)) {
+                String set = r.setSessionSkill(sessionId, skill);
+                if (!set.isEmpty()) {
+                    trace.logf("  skill \"%s\" selected for agent \"%s\"", set, id);
+                }
+            } else {
+                r.setSessionSkill(sessionId, "");
+            }
+        }
     }
 
     /**

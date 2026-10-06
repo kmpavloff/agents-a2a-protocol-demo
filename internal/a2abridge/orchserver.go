@@ -121,6 +121,31 @@ func (e *orchExecutor) selectAgent(msg *a2a.Message) string {
 	return id
 }
 
+// applySkill выставляет навык этого хода: выбранному в чате агенту — навык
+// из metadata.skill сообщения браузера, всем остальным — никакого. Навык
+// живёт в Remote по разговору, поэтому доходит до агента одинаково и в
+// verbatim-ходе, и через вызов инструмента моделью. В «Авто» навык не
+// передаётся никому: выбрать его можно только вместе с агентом.
+func (e *orchExecutor) applySkill(sessionID, agentID string, msg *a2a.Message) {
+	skill := ""
+	if agentID != autoAgentID && msg != nil && msg.Metadata != nil {
+		skill, _ = msg.Metadata["skill"].(string)
+	}
+	for _, id := range e.reg.IDs() {
+		r, ok := e.reg.Get(id)
+		if !ok {
+			continue
+		}
+		if id == agentID {
+			if set := r.SetSessionSkill(sessionID, skill); set != "" {
+				e.trace.Logf("  skill %q selected for agent %q", set, id)
+			}
+			continue
+		}
+		r.SetSessionSkill(sessionID, "")
+	}
+}
+
 // runnerFor returns the runner for the chosen agent: with every agent's tool in
 // "auto" mode, or with exactly one tool when the user picked an agent. Runners
 // are cached per selection.
@@ -353,6 +378,7 @@ func (e *orchExecutor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) 
 		}
 
 		agentID := e.selectAgent(ec.Message)
+		e.applySkill(sessionID, agentID, ec.Message)
 		turn := e.nextTurn()
 		e.trace.Logf("  agent selection: %s | ход #%d", agentID, turn)
 
@@ -684,6 +710,8 @@ type A2UIProbe struct {
 	// AgentID, if set, rides along in the message metadata — the same way the
 	// browser tells the orchestrator which agent the user picked.
 	AgentID string
+	// Skill — навык, выбранный во втором селекторе браузера.
+	Skill string
 	// A2UI — режим разговора, как переключатель в браузере. false означает
 	// «только текст»: расширение не объявляется ни заголовком, ни
 	// capabilities, и оркестратор не просит разметку у внешнего агента.
@@ -715,6 +743,9 @@ func (p *A2UIProbe) send(ctx context.Context, part *a2a.Part) ([]*a2a.Part, erro
 	meta := map[string]any{}
 	if p.AgentID != "" {
 		meta["agentId"] = p.AgentID
+	}
+	if p.Skill != "" {
+		meta["skill"] = p.Skill
 	}
 	if p.A2UI {
 		meta["a2uiClientCapabilities"] = a2ui.ClientCapabilities()

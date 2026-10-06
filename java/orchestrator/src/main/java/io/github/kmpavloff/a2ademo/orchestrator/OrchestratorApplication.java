@@ -64,8 +64,8 @@ public class OrchestratorApplication {
         console.logf("agents (%d), overlay %s:", agents.size(), cfg.agentsOverlayPath());
         for (AgentConfig a : agents) {
             // Пароль сюда не попадает намеренно: логи демо показывают целиком.
-            console.logf("  - %s → %s (card %s, skill=\"%s\", verbatim=%s, timeout=%s)",
-                    a.id(), a.url(), a.cardPath(), a.skill(), a.verbatim(), a.timeoutDuration());
+            console.logf("  - %s → %s (card %s, skills=%s, verbatim=%s, timeout=%s)",
+                    a.id(), a.url(), a.cardPath(), a.skills(), a.verbatim(), a.timeoutDuration());
         }
 
         if (web) {

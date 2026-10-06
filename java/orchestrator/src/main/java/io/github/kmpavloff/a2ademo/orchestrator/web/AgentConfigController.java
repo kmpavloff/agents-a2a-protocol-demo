@@ -41,7 +41,7 @@ public class AgentConfigController {
         public String name;
         public String url;
         public String cardPath;
-        public String skill;
+        public List<String> skills = List.of();
         public boolean verbatim;
         public String timeout;
         public String description;
@@ -78,7 +78,7 @@ public class AgentConfigController {
         public String name = "";
         public String url = "";
         public String cardPath = "";
-        public String skill = "";
+        public List<String> skills = List.of();
         public boolean verbatim;
         public String timeout = "";
         public String description = "";
@@ -86,7 +86,7 @@ public class AgentConfigController {
         public TlsJson tls = new TlsJson();
 
         AgentConfig toConfig() {
-            return new AgentConfig(id, name, url, cardPath, skill, verbatim, timeout, description,
+            return new AgentConfig(id, name, url, cardPath, skills, verbatim, timeout, description,
                     new AuthConfig(auth.type, auth.username, auth.password),
                     new TlsConfig(tls.certFile, tls.keyFile, tls.caFile, tls.insecureSkipVerify));
         }
@@ -152,7 +152,7 @@ public class AgentConfigController {
         o.name = a.name();
         o.url = a.url();
         o.cardPath = a.cardPath();
-        o.skill = a.skill();
+        o.skills = a.skills();
         o.verbatim = a.verbatim();
         o.timeout = a.timeout();
         o.description = a.description();

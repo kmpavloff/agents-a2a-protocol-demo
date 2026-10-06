@@ -264,7 +264,7 @@ public class AgentStore {
             return over.get(i).agent();
         }
         return base.stream().filter(a -> a.id().equals(id)).findFirst()
-                .orElse(new AgentConfig(id, "", "", "", "", false, "", "", null));
+                .orElse(new AgentConfig(id, "", "", "", List.of(), false, "", "", null));
     }
 
     private static boolean envSet(String id, String field) {
@@ -284,7 +284,7 @@ public class AgentStore {
             List<AgentOverride> next = new ArrayList<>(over);
             int i = indexOver(next, id);
             AgentOverride hidden = new AgentOverride(
-                    new AgentConfig(id, "", "", "", "", false, "", "", null), true);
+                    new AgentConfig(id, "", "", "", List.of(), false, "", "", null), true);
             if (inBase(id)) {
                 if (i >= 0) {
                     next.set(i, hidden);

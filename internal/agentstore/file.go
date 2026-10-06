@@ -36,6 +36,10 @@ func loadOverlay(path string) ([]Override, error) {
 	if err := yaml.Unmarshal(b, &doc); err != nil {
 		return nil, fmt.Errorf("parse agents overlay %s: %w", path, err)
 	}
+	// Overlay, записанный до появления списка навыков, несёт одиночный skill:.
+	for i := range doc.Agents {
+		doc.Agents[i].MigrateLegacy()
+	}
 	return doc.Agents, nil
 }
 

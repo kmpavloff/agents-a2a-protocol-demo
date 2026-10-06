@@ -90,7 +90,7 @@ class RemoteTest {
     }
 
     private AgentConfig cfg() {
-        return new AgentConfig("orders", "Агент заказов", base, "", "", false, "", "", AuthConfig.NONE);
+        return new AgentConfig("orders", "Агент заказов", base, "", List.of(), false, "", "", AuthConfig.NONE);
     }
 
     // Соединение открывается лениво: выключенный агент не мешает оркестратору
@@ -188,8 +188,10 @@ class RemoteTest {
         results.push("{\"task\":{\"id\":\"t1\",\"status\":{\"state\":\"TASK_STATE_WORKING\"}}}");
         results.addLast("{\"task\":{\"id\":\"t1\",\"status\":{\"state\":\"TASK_STATE_COMPLETED\"}}}");
         Tracer trace = Tracer.noop();
-        AgentConfig c = new AgentConfig("orders", "Агент заказов", base, "", "shop", false, "", "", AuthConfig.NONE);
-        new Remote(c, trace).ask("s1", "карта 4111 1111 1111 1111", false);
+        AgentConfig c = new AgentConfig("orders", "Агент заказов", base, "", List.of("shop"), false, "", "", AuthConfig.NONE);
+        Remote r = new Remote(c, trace);
+        r.setSessionSkill("s1", "shop");
+        r.ask("s1", "карта 4111 1111 1111 1111", false);
 
         List<AgentCallLog.Call> calls = trace.calls().since("s1", 0);
         assertEquals(List.of("SendMessage", "GetTask"), calls.stream().map(AgentCallLog.Call::method).toList());
@@ -202,6 +204,30 @@ class RemoteTest {
         assertTrue(send.response().has("result"));
         assertEquals(List.of(), trace.calls().since("s2", 0), "чужая сессия видит обмены");
         assertEquals(1, trace.calls().since("s1", send.seq()).size(), "after отдаёт только новые");
+    }
+
+    // Навык уходит только явно выбранный и только из списка агента: без
+    // выбора metadata.skill нет вовсе, чужой навык отвергается, выбор живёт по
+    // разговору.
+    @Test
+    void skillIsPerSessionAndValidated() {
+        for (int i = 0; i < 4; i++) {
+            results.addLast("{\"task\":{\"id\":\"t1\",\"status\":{\"state\":\"TASK_STATE_COMPLETED\"}}}");
+        }
+        Remote r = remote(new AgentConfig("orders", "", base, "", List.of("shop", "support"), false, "", "",
+                AuthConfig.NONE));
+        assertEquals("support", r.setSessionSkill("a", "support"));
+        assertEquals("", r.setSessionSkill("b", "чужой"), "навык не из списка должен отвергаться");
+        r.ask("a", "привет", false);
+        r.ask("b", "привет", false);
+        r.ask("c", "привет", false);
+        r.setSessionSkill("a", "");
+        r.ask("a", "ещё", false);
+        assertEquals("support", seenRequests.get(0).path("params").path("message").path("metadata").path("skill").asText());
+        for (int i = 1; i < 4; i++) {
+            assertTrue(seenRequests.get(i).path("params").path("message").path("metadata").path("skill").isMissingNode(),
+                    "без выбора навык уходить не должен: запрос #" + i);
+        }
     }
 
     // Разметку просим только у агента, который объявил её в карточке, и только
@@ -253,7 +279,7 @@ class RemoteTest {
         for (int i = 0; i < 20; i++) {
             results.addLast(working);
         }
-        AgentConfig shortTimeout = new AgentConfig("orders", "Агент заказов", base, "", "", false, "3s", "", AuthConfig.NONE);
+        AgentConfig shortTimeout = new AgentConfig("orders", "Агент заказов", base, "", List.of(), false, "3s", "", AuthConfig.NONE);
         Remote r = remote(shortTimeout);
 
         A2aClient.A2aException e = assertTimeoutPreemptively(Duration.ofSeconds(10), () ->

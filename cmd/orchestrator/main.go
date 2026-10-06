@@ -64,8 +64,8 @@ func main() {
 	log.Printf("agents (%d), overlay %s:", len(agents), cfg.AgentsOverlayPath)
 	for _, a := range agents {
 		// Пароль сюда не попадает намеренно: логи демо показывают целиком.
-		log.Printf("  - %s → %s (card %s, skill=%q, verbatim=%v, timeout=%s)",
-			a.ID, a.URL, a.CardPath, a.Skill, a.Verbatim, a.TimeoutDuration())
+		log.Printf("  - %s → %s (card %s, skills=%q, verbatim=%v, timeout=%s)",
+			a.ID, a.URL, a.CardPath, a.Skills, a.Verbatim, a.TimeoutDuration())
 	}
 
 	// Сессионная служба общая для всех runner'ов: набор инструментов меняется

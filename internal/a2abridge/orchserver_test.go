@@ -283,6 +283,36 @@ func TestExecutorVerbatimBypassesLLM(t *testing.T) {
 	}
 }
 
+// Навык из второго селектора браузера доходит до агента в metadata.skill, а
+// «Авто» и «без навыка» его не передают — даже если раньше в этом разговоре
+// навык был выбран.
+func TestExecutorPassesSelectedSkill(t *testing.T) {
+	s := startOuroborosStub(t, false)
+	reg := NewRegistry([]config.AgentConfig{ouroborosCfg(s.URL)}, nil)
+	url := serveExecutor(t, NewOrchestratorExecutor(reg, failingBuilder(t), nil), OrchestratorCard)
+	skillOf := func(i int) any {
+		meta, _ := s.message(t, i)["metadata"].(map[string]any)
+		return meta["skill"]
+	}
+
+	probe := newA2UIClient(t, url)
+	probe.c.AgentID, probe.c.Skill = "ouroboros", "support"
+	probe.sendText(t, "статус заказа ORD-001")
+	if skillOf(0) != "support" {
+		t.Errorf("выбранный навык: %v", skillOf(0))
+	}
+	probe.c.Skill = ""
+	probe.sendText(t, "ещё раз")
+	if skillOf(1) != nil {
+		t.Errorf("«без навыка» не должен передавать навык: %v", skillOf(1))
+	}
+	probe.c.Skill = "чужой"
+	probe.sendText(t, "и ещё")
+	if skillOf(2) != nil {
+		t.Errorf("навык не из списка агента не должен уходить: %v", skillOf(2))
+	}
+}
+
 // Нажатие кнопки уезжает внешнему агенту штатным событием A2UI, а не
 // пересказом на человеческом языке: пересказ понимает только модель, а событие
 // — любой агент, собранный на референсном SDK.

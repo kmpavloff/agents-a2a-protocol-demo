@@ -33,7 +33,7 @@ func TestLiveRemoteAgent(t *testing.T) {
 	}
 	cfg := config.AgentConfig{
 		ID: "live", Name: "Live agent", URL: url, CardPath: cardPath,
-		Skill: os.Getenv("LIVE_AGENT_SKILL"), Timeout: "240s",
+		Timeout:     "240s",
 		Description: "Проверочный удалённый агент.",
 		Auth: config.AuthConfig{
 			Type:     "basic",
@@ -41,7 +41,11 @@ func TestLiveRemoteAgent(t *testing.T) {
 			Password: os.Getenv("LIVE_AGENT_PASSWORD"),
 		},
 	}
+	if sk := os.Getenv("LIVE_AGENT_SKILL"); sk != "" {
+		cfg.Skills = []string{sk}
+	}
 	r := NewRemote(cfg, NewTracer(os.Stdout, "[live] "))
+	r.SetSessionSkill("live-session", os.Getenv("LIVE_AGENT_SKILL"))
 	reply, err := r.Ask(context.Background(), "live-session", prompt)
 	if err != nil {
 		t.Fatalf("Ask: %v", err)

@@ -96,6 +96,8 @@ public class Remote {
 
     private final Map<String, Pending> pending = new ConcurrentHashMap<>();
     private final Map<String, String> contexts = new ConcurrentHashMap<>();
+    /** sessionId → навык, выбранный в чате для этого разговора. */
+    private final Map<String, String> skills = new ConcurrentHashMap<>();
 
     /**
      * Создаёт соединение, но ещё не открывает его: карточка резолвится лениво
@@ -146,6 +148,33 @@ public class Remote {
      */
     public boolean probed() {
         return probed;
+    }
+
+    /** Навыки агента из настроек: их предлагает селектор в чате. */
+    public List<String> skills() {
+        return cfg.skills();
+    }
+
+    /**
+     * Задаёт навык, который уйдёт в metadata.skill следующих запросов этого
+     * разговора. Пустой — навык не передаётся. Навык не из списка агента
+     * отвергается: браузер со старым списком не должен слать агенту то, чего в
+     * настройках уже нет. Возвращает навык, который реально установлен.
+     */
+    public String setSessionSkill(String sessionId, String skill) {
+        if (skill == null) {
+            skill = "";
+        }
+        if (!skill.isEmpty() && !cfg.hasSkill(skill)) {
+            trace.logf("⚠ unknown skill \"%s\" for agent \"%s\" — sending none", skill, cfg.id());
+            skill = "";
+        }
+        if (skill.isEmpty()) {
+            skills.remove(sessionId);
+        } else {
+            skills.put(sessionId, skill);
+        }
+        return skill;
     }
 
     public WorkerProfile profile() {
@@ -289,6 +318,7 @@ public class Remote {
         A2aClient c = client;
         Pending p = pending.get(sessionId);
         String contextId = contexts.get(sessionId);
+        String skill = skills.getOrDefault(sessionId, "");
         boolean a2ui = wantA2ui && acceptsA2ui();
         // Граница на весь ход целиком — SendMessage и последующий опрос GetTask
         // вместе, как в Go (context.WithTimeout вокруг ask). Таймаут конфига
@@ -312,8 +342,10 @@ public class Remote {
             }
         }
         Map<String, Object> meta = new LinkedHashMap<>();
-        if (!cfg.skill().isEmpty()) {
-            meta.put("skill", cfg.skill());
+        // metadata.skill включает у внешнего агента инструменты нужного
+        // навыка. Уходит лишь явно выбранный в чате.
+        if (!skill.isEmpty()) {
+            meta.put("skill", skill);
         }
         // Какие каталоги умеет наш рендерер. Штатный признак «клиент говорит на
         // A2UI»: acceptedOutputModes спека таким признаком не считает.
@@ -327,7 +359,7 @@ public class Remote {
         // вопрос, который приходится проверять.
         String sentCtx = p != null ? p.contextId() : msg.contextId;
         trace.logf("    SendMessage role=user skill=\"%s\" contextId=%s text=\"%s\"",
-                cfg.skill(), sentCtx == null || sentCtx.isEmpty() ? "(новый разговор)" : sentCtx,
+                skill, sentCtx == null || sentCtx.isEmpty() ? "(новый разговор)" : sentCtx,
                 Tracer.maskCardLike(echo));
 
         A2aClient.SendResult res;

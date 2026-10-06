@@ -27,7 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class RegistryTest {
 
     private static AgentConfig agent(String id, String url) {
-        return new AgentConfig(id, "", url, "", "", false, "", "", AuthConfig.NONE);
+        return new AgentConfig(id, "", url, "", List.of(), false, "", "", AuthConfig.NONE);
     }
 
     // Порядок задаёт пункты селектора и выбор агента для терминального REPL.
