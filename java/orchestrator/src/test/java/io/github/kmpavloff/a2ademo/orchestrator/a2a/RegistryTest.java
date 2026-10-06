@@ -5,9 +5,19 @@ import io.github.kmpavloff.a2ademo.common.config.AuthConfig;
 import io.github.kmpavloff.a2ademo.common.trace.Tracer;
 import org.junit.jupiter.api.Test;
 
+import com.sun.net.httpserver.HttpServer;
+
+import java.io.IOException;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -118,5 +128,85 @@ class RegistryTest {
         Registry reg = new Registry(List.of(agent("orders", "http://a")), Tracer.noop());
         reg.apply(List.of());
         assertEquals(null, reg.first());
+    }
+
+    /**
+     * Агент, чья карточка «висит», пока тест не откроет ворота, — как у живого
+     * агента, отвечающего секундами. arrived срабатывает, когда запрос дошёл.
+     */
+    private record Gated(HttpServer server, String url, CountDownLatch arrived, CountDownLatch gate) {
+        static Gated start() throws IOException {
+            HttpServer s = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+            CountDownLatch arrived = new CountDownLatch(1);
+            CountDownLatch gate = new CountDownLatch(1);
+            s.createContext("/.well-known/agent-card.json", ex -> {
+                arrived.countDown();
+                try {
+                    gate.await(10, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                byte[] b = """
+                        {"name":"slow","description":"d","version":"1","capabilities":{},"skills":[]}
+                        """.getBytes(StandardCharsets.UTF_8);
+                ex.getResponseHeaders().add("Content-Type", "application/json");
+                ex.sendResponseHeaders(200, b.length);
+                try (OutputStream os = ex.getResponseBody()) {
+                    os.write(b);
+                }
+            });
+            s.setExecutor(java.util.concurrent.Executors.newCachedThreadPool());
+            s.start();
+            return new Gated(s, "http://127.0.0.1:" + s.getAddress().getPort(), arrived, gate);
+        }
+    }
+
+    // Пока первое подключение в пути, агент ещё не проверен: «не отвечает» на
+    // этом месте — домысел, а не факт.
+    @Test
+    void listIsNotProbedWhileTheFirstConnectIsInFlight() throws Exception {
+        Gated g = Gated.start();
+        try {
+            Registry reg = new Registry(List.of(agent("slow", g.url())), Tracer.noop());
+            reg.list(); // запускает фоновую проверку
+            assertTrue(g.arrived().await(5, TimeUnit.SECONDS));
+            Registry.AgentInfo during = reg.list().getFirst();
+            assertFalse(during.probed(), "подключение ещё идёт, а агент уже помечен проверенным: " + during);
+
+            g.gate().countDown();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (System.nanoTime() < deadline) {
+                Registry.AgentInfo after = reg.list().getFirst();
+                if (after.probed()) {
+                    assertTrue(after.available(), "живой агент помечен недоступным: " + after);
+                    return;
+                }
+                Thread.sleep(20);
+            }
+            fail("фоновая проверка не завершилась");
+        } finally {
+            g.gate().countDown();
+            g.server().stop(0);
+        }
+    }
+
+    // Ход, пришедший во время первого подключения, должен его дождаться, а не
+    // счесть агента лежащим: иначе запрос сразу после загрузки страницы
+    // остаётся без инструмента вполне живого агента.
+    @Test
+    void aTurnDuringTheFirstConnectWaitsForIt() throws Exception {
+        Gated g = Gated.start();
+        try {
+            Registry reg = new Registry(List.of(agent("slow", g.url())), Tracer.noop());
+            reg.list();
+            assertTrue(g.arrived().await(5, TimeUnit.SECONDS));
+            CompletableFuture<List<OrdersClient>> turn = CompletableFuture.supplyAsync(reg::availableClients);
+            Thread.sleep(100); // ход уже внутри, пока ворота закрыты
+            g.gate().countDown();
+            assertEquals(1, turn.get(10, TimeUnit.SECONDS).size(), "живой агент выпал из хода");
+        } finally {
+            g.gate().countDown();
+            g.server().stop(0);
+        }
     }
 }

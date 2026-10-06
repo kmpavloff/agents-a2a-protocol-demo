@@ -2,6 +2,12 @@ package a2abridge
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	neturl "net/url"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -201,5 +207,78 @@ func TestClientInitRunsForLaterClients(t *testing.T) {
 	}
 	if len(inited) != 1 {
 		t.Fatalf("SetClientInit вызван %d раз(а), want 1", len(inited))
+	}
+}
+
+// gatedAgent ставит перед заглушкой задержку на запрос карточки: так первое
+// подключение «висит», пока тест не откроет ворота, — как у живого агента,
+// чья карточка отвечает секундами.
+func gatedAgent(t *testing.T) (url string, arrived <-chan struct{}, open func()) {
+	t.Helper()
+	s := startOuroborosStub(t, false)
+	target, err := neturl.Parse(s.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	gate, hit := make(chan struct{}), make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/.well-known/") {
+			select {
+			case hit <- struct{}{}:
+			default:
+			}
+			<-gate
+		}
+		proxy.ServeHTTP(w, r)
+	}))
+	var once sync.Once
+	opener := func() { once.Do(func() { close(gate) }) }
+	t.Cleanup(func() { opener(); srv.Close() })
+	return srv.URL, hit, opener
+}
+
+// Пока первое подключение в пути, агент ещё не проверен: «не отвечает» на
+// этом месте — домысел, а не факт.
+func TestRegistryListIsNotProbedWhileConnecting(t *testing.T) {
+	url, arrived, open := gatedAgent(t)
+	g := NewRegistry([]config.AgentConfig{ouroborosCfg(url)}, nil)
+
+	g.List(context.Background()) // запускает фоновую проверку
+	<-arrived
+	if info := g.List(context.Background())[0]; info.Probed {
+		t.Errorf("подключение ещё идёт, а агент уже помечен проверенным: %+v", info)
+	}
+
+	open()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if info := g.List(context.Background())[0]; info.Probed {
+			if !info.Available {
+				t.Errorf("живой агент помечен недоступным: %+v", info)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("фоновая проверка не завершилась")
+}
+
+// Ход, пришедший во время первого подключения, должен его дождаться, а не
+// счесть агента лежащим: иначе запрос сразу после загрузки страницы падает
+// с «not responding» у вполне живого агента.
+func TestRegistryReadyWaitsForInFlightConnect(t *testing.T) {
+	url, arrived, open := gatedAgent(t)
+	g := NewRegistry([]config.AgentConfig{ouroborosCfg(url)}, nil)
+	r, _ := g.Get("ouroboros")
+
+	g.List(context.Background())
+	<-arrived
+	done := make(chan error, 1)
+	go func() { done <- g.ready(context.Background(), r) }()
+	time.Sleep(100 * time.Millisecond) // ready уже внутри, пока ворота закрыты
+	open()
+	if err := <-done; err != nil {
+		t.Fatalf("ready во время подключения: %v", err)
 	}
 }

@@ -140,7 +140,7 @@ public class Remote {
     }
 
     /**
-     * Была ли вообще попытка подключиться. Пока её не было, «недоступен» — не
+     * Завершилась ли хоть одна попытка подключиться. Пока нет, «недоступен» — не
      * факт, а домысел, и показывать его пользователю нельзя.
      */
     public boolean probed() {
@@ -180,7 +180,10 @@ public class Remote {
             if (client != null) {
                 return;
             }
-            probed = true;
+            // probed ставится по итогу попытки, а не на входе: пока карточка в
+            // пути, агент ещё не проверен. Иначе /api/agents показывал бы живого
+            // агента «не отвечает», а Registry.ready() счёл бы его лежащим и
+            // выкинул из хода, пришедшего во время первого подключения.
             A2aClient.Resolved resolved;
             try {
                 resolved = A2aClient.resolve(cfg, trace);
@@ -191,6 +194,7 @@ public class Remote {
             card = resolved.card();
             profile = buildProfile(resolved.card());
             available = true;
+            probed = true;
             // client — последним: он volatile и это его чтением connected-проверка
             // («client != null») решает, что соединение готово. Пишем его после
             // card/profile/available, чтобы поток, увидевший ненулевой client,
@@ -211,6 +215,7 @@ public class Remote {
     private void markUnavailable() {
         client = null;
         available = false;
+        probed = true;
     }
 
     /**

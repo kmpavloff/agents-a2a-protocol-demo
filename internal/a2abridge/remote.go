@@ -308,7 +308,7 @@ type Remote struct {
 	card      *a2a.AgentCard
 	profile   WorkerProfile
 	available bool
-	probed    bool               // была ли хоть одна попытка подключения
+	probed    bool               // завершилась ли хоть одна попытка подключения
 	toolName  string             // перекрытие имени инструмента (см. Registry)
 	pending   map[string]pending // sessionID → зависшая input-required задача
 	contexts  map[string]string  // sessionID → contextId удалённого агента
@@ -363,7 +363,7 @@ func (r *Remote) Available() bool {
 	return r.available
 }
 
-// Probed сообщает, была ли вообще попытка подключиться. Пока её не было,
+// Probed сообщает, завершилась ли хоть одна попытка подключиться. Пока нет,
 // «недоступен» — не факт, а домысел, и показывать его пользователю нельзя.
 func (r *Remote) Probed() bool {
 	r.mu.Lock()
@@ -424,10 +424,10 @@ func (r *Remote) Connect(ctx context.Context) error {
 		return nil
 	}
 
-	r.mu.Lock()
-	r.probed = true
-	r.mu.Unlock()
-
+	// probed ставится по итогу попытки, а не на входе: пока карточка в
+	// пути, агент ещё не проверен. Иначе /api/agents показывал бы живого
+	// агента «не отвечает», а ready() счёл бы его лежащим и уронил ход,
+	// пришедший во время первого подключения.
 	hc, err := r.httpClient()
 	if err != nil {
 		r.markUnavailable()
@@ -465,6 +465,7 @@ func (r *Remote) Connect(ctx context.Context) error {
 	r.card = card
 	r.client = cl
 	r.available = true
+	r.probed = true
 	r.profile = r.buildProfile(card)
 	toolName := r.profile.ToolName
 	r.mu.Unlock()
@@ -556,6 +557,7 @@ func (r *Remote) markUnavailable() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.available = false
+	r.probed = true
 	r.client = nil
 }
 
